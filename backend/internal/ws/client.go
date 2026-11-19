@@ -11,6 +11,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/crowdcast/crowdcast/internal/chat"
 	"github.com/crowdcast/crowdcast/internal/hub"
+	"github.com/crowdcast/crowdcast/internal/metrics"
 	"github.com/crowdcast/crowdcast/internal/polls"
 	"github.com/crowdcast/crowdcast/internal/presence"
 	"golang.org/x/time/rate"
@@ -152,6 +153,8 @@ func (c *Client) ReadPump(ctx context.Context) {
 			return
 		}
 
+		metrics.Default().WSMessages.WithLabelValues(metrics.MessageType(msgBytes), "in").Inc()
+
 		var msg ClientMessage
 		if err := json.Unmarshal(msgBytes, &msg); err != nil {
 			c.sendErrorMessage("INVALID_FORMAT", "malformed json payload")
@@ -250,6 +253,7 @@ func (c *Client) WritePump(ctx context.Context) {
 				return
 			}
 			writeCtx, cancel := context.WithTimeout(ctx, writeWait)
+			metrics.Default().WSMessages.WithLabelValues(metrics.MessageType(msg), "out").Inc()
 			err := c.conn.Write(writeCtx, websocket.MessageText, msg)
 			cancel()
 			if err != nil {

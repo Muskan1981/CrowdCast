@@ -20,10 +20,12 @@ import (
 	"github.com/crowdcast/crowdcast/internal/config"
 	"github.com/crowdcast/crowdcast/internal/events"
 	"github.com/crowdcast/crowdcast/internal/hub"
+	"github.com/crowdcast/crowdcast/internal/metrics"
 	"github.com/crowdcast/crowdcast/internal/middleware"
 	"github.com/crowdcast/crowdcast/internal/polls"
 	"github.com/crowdcast/crowdcast/internal/presence"
 	"github.com/crowdcast/crowdcast/internal/reactions"
+	"github.com/crowdcast/crowdcast/internal/stats"
 	"github.com/crowdcast/crowdcast/internal/store/postgres"
 	redisstore "github.com/crowdcast/crowdcast/internal/store/redis"
 	"github.com/crowdcast/crowdcast/internal/ws"
@@ -133,6 +135,14 @@ func main() {
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 
+	// One registry per process, labelled with this instance's ID. The sampler
+	// stops when main returns.
+	m := metrics.New(cfg.InstanceID)
+	metrics.SetDefault(m)
+	samplerCtx, stopSampler := context.WithCancel(context.Background())
+	defer stopSampler()
+	m.StartSampler(samplerCtx, 2*time.Second)
+
 	logger.Info("starting crowdcast api instance",
 		slog.String("zone", cfg.InstanceZone),
 		slog.Int("weight", cfg.InstanceWeight),
@@ -215,11 +225,15 @@ func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool, 
 
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer(logger))
+	r.Use(metrics.Default().HTTPMiddleware())
 	r.Use(middleware.CORS(cfg.AllowedOrigins))
 	r.Use(middleware.AccessLog(logger))
 	r.Use(middleware.Timeout(30 * time.Second))
 
-	// Ops probes
+	// Ops probes and Prometheus scrape endpoint live at the ROOT, outside /api/v1,
+	// so the public Nginx route can block /metrics while probes stay reachable.
+	r.Handle("/metrics", metrics.Default().Handler())
+
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
@@ -302,6 +316,32 @@ func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool, 
 	pollService := polls.NewService(rdb, pollRepo, hubInstance)
 	pollHandler := polls.NewHandler(pollService)
 
+	// Stats: HTTP endpoints for every instance, plus the leader-elected ticker and
+	// the request flusher. The goroutines run until the process exits.
+	var statsHandler *stats.Handler
+	if rdb != nil && pgPool != nil {
+		statsSvc := stats.NewService(stats.Deps{
+			Redis:     rdb,
+			Presence:  presenceSvc,
+			Events:    eventsService,
+			Viewers:   viewerRepo,
+			Reactions: rxRepo,
+			Stats:     postgres.NewStatsRepository(pgPool),
+			Activity:  activityRepo,
+			Hub:       hubInstance,
+			Prom:      stats.NewPromClient(cfg.PrometheusURL, 2*time.Second),
+		})
+		statsHandler = stats.NewHandler(statsSvc)
+
+		elector := stats.NewElector(
+			stats.NewRedisLockStore(rdb.Client),
+			redisstore.StatsLeaderKey(), cfg.InstanceID,
+			5*time.Second, 1500*time.Millisecond,
+		)
+		go elector.Run(context.Background(), statsSvc.RunLeader)
+		go stats.RunRequestFlusher(context.Background(), rdb, metrics.Default(), 5*time.Second)
+	}
+
 	wsHandler := ws.NewHandler(
 		tokenService,
 		hubInstance,
@@ -333,6 +373,13 @@ func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool, 
 
 		// Session registration
 		api.Post("/session", authHandler.CreateSession)
+
+		// Stats (public read-only dashboards)
+		if statsHandler != nil {
+			api.Get("/events/{id}/stats/overview", statsHandler.Overview)
+			api.Get("/events/{id}/stats/traffic", statsHandler.Traffic)
+			api.Get("/events/{id}/stats/audience", statsHandler.Audience)
+		}
 
 		// Events
 		api.Get("/events/{id}", eventsHandler.GetEvent)

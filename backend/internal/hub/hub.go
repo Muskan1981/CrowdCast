@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crowdcast/crowdcast/internal/metrics"
 	"github.com/crowdcast/crowdcast/internal/presence"
 	redisstore "github.com/crowdcast/crowdcast/internal/store/redis"
 )
@@ -73,6 +74,11 @@ func (h *Hub) removeRoom(eventID string) {
 func (h *Hub) Register(client Client) {
 	room := h.GetOrCreateRoom(client.EventID())
 	room.register <- client
+
+	// Record that this event has live viewers so the stats leader ticks it.
+	if h.rdb != nil {
+		go h.rdb.SAdd(context.Background(), redisstore.StatsEventsKey(), client.EventID())
+	}
 }
 
 // Unregister removes a client from its event room.
@@ -92,7 +98,7 @@ func (h *Hub) PublishEventMessage(ctx context.Context, eventID string, payload a
 		return err
 	}
 	channel := redisstore.EventChannelKey(eventID)
-	return h.rdb.Publish(ctx, channel, data).Err()
+	return h.rdb.Publish(ctx, channel, metrics.StampPublish(data, time.Now())).Err()
 }
 
 // startPresenceTicker coalesces presence broadcasts every 1.5s per active room.
@@ -125,6 +131,7 @@ func (h *Hub) broadcastPresenceTicks() {
 		stats, err := h.presence.GetPresenceStats(ctx, room.eventID)
 		cancel()
 		if err == nil && stats != nil {
+			metrics.Default().EventAudience.Set(float64(stats.Attendees))
 			if data, err := json.Marshal(stats); err == nil {
 				room.BroadcastDirect(data)
 			}

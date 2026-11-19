@@ -28,9 +28,9 @@ type SessionRecord struct {
 }
 
 type Service struct {
-	rdb        *redisstore.Client
-	viewers    postgres.ViewerRepository
-	events     postgres.EventRepository
+	rdb         *redisstore.Client
+	viewers     postgres.ViewerRepository
+	events      postgres.EventRepository
 	sessionChan chan SessionRecord
 	closeChan   chan struct {
 		sessionID int64

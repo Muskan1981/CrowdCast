@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crowdcast/crowdcast/internal/metrics"
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
 )
@@ -117,6 +118,7 @@ func Recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 					reqID := GetRequestID(r.Context())
 					stack := string(debug.Stack())
 
+					metrics.Default().AppErrors.WithLabelValues("panic").Inc()
 					logger.Error("panic_recovered",
 						slog.Any("error", rvr),
 						slog.String("request_id", reqID),

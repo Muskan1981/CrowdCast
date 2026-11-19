@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crowdcast/crowdcast/internal/metrics"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -27,6 +28,7 @@ func NewClient(ctx context.Context, redisURL string) (*Client, error) {
 	opts.WriteTimeout = 3 * time.Second
 
 	rdb := redis.NewClient(opts)
+	rdb.AddHook(metrics.RedisHook{})
 
 	// Verify connectivity
 	pingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)

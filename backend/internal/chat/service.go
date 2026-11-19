@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crowdcast/crowdcast/internal/hub"
+	"github.com/crowdcast/crowdcast/internal/metrics"
 	"github.com/crowdcast/crowdcast/internal/store/postgres"
 	redisstore "github.com/crowdcast/crowdcast/internal/store/redis"
 	"github.com/redis/go-redis/v9"
@@ -167,6 +168,7 @@ func (s *Service) PostMessage(ctx context.Context, eventID, userID, displayName,
 		}
 	}
 
+	metrics.Default().ChatMessages.Inc()
 	return &chatMsg, nil
 }
 

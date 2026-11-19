@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crowdcast/crowdcast/internal/hub"
+	"github.com/crowdcast/crowdcast/internal/metrics"
 	"github.com/crowdcast/crowdcast/internal/store/postgres"
 	redisstore "github.com/crowdcast/crowdcast/internal/store/redis"
 	"github.com/google/uuid"
@@ -18,10 +19,10 @@ import (
 )
 
 var (
-	ErrNotFound       = errors.New("poll not found")
-	ErrAlreadyVoted   = errors.New("user has already voted in this poll")
-	ErrPollClosed     = errors.New("poll is closed")
-	ErrInvalidOption  = errors.New("invalid poll option index")
+	ErrNotFound      = errors.New("poll not found")
+	ErrAlreadyVoted  = errors.New("user has already voted in this poll")
+	ErrPollClosed    = errors.New("poll is closed")
+	ErrInvalidOption = errors.New("invalid poll option index")
 )
 
 type PollResponse struct {
@@ -43,9 +44,9 @@ type PollUpdateMessage struct {
 }
 
 type Service struct {
-	rdb     *redisstore.Client
-	pollPg  postgres.PollRepository
-	hub     *hub.Hub
+	rdb    *redisstore.Client
+	pollPg postgres.PollRepository
+	hub    *hub.Hub
 
 	// Throttled broadcast per poll (max 2/sec -> 500ms throttle)
 	broadcastMu sync.Mutex
@@ -200,6 +201,7 @@ func (s *Service) Vote(ctx context.Context, pollID, userID string, optionIndex i
 	// 5. Throttled broadcast (max 2/sec -> 500ms interval)
 	s.throttledBroadcast(pollID, updated)
 
+	metrics.Default().PollVotes.Inc()
 	return updated, nil
 }
 

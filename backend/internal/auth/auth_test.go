@@ -128,11 +128,11 @@ func TestAdminMiddleware(t *testing.T) {
 
 func TestPickWeightedCity(t *testing.T) {
 	validCities := map[string]bool{
-		"Mumbai":     true,
-		"Delhi NCR":  true,
-		"Bengaluru":  true,
-		"Hyderabad":  true,
-		"Other":      true,
+		"Mumbai":    true,
+		"Delhi NCR": true,
+		"Bengaluru": true,
+		"Hyderabad": true,
+		"Other":     true,
 	}
 
 	for i := 0; i < 50; i++ {

@@ -59,3 +59,32 @@ func EventChannelKey(eventID string) string {
 func ControlChannelKey() string {
 	return "ps:control"
 }
+
+// StatsEventsKey is a set of event IDs that have at least one WebSocket viewer.
+// The stats leader iterates it to know which events to tick.
+func StatsEventsKey() string {
+	return "stats:events"
+}
+
+// StatsLeaderKey is the lock key the stats leader holds (SET NX PX + renewal).
+func StatsLeaderKey() string {
+	return "stats:leader"
+}
+
+// StatsHistoryKey is a sorted set (score = unix ms) of per-tick event snapshots,
+// used to compute "vs previous window" deltas.
+func StatsHistoryKey(eventID string) string {
+	return fmt.Sprintf("stats:hist:%s", eventID)
+}
+
+// StatsMilestoneKey stores the last audience milestone announced for an event,
+// so a new leader does not repeat an announcement after failover.
+func StatsMilestoneKey(eventID string) string {
+	return fmt.Sprintf("stats:milestone:%s", eventID)
+}
+
+// StatsRequestsKey is a hash of minute bucket (unix minute) -> request count,
+// written by every instance and read as the Redis fallback for traffic charts.
+func StatsRequestsKey() string {
+	return "stats:reqs"
+}

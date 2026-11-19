@@ -447,7 +447,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/ChaosActionResponse'
 
+  # Ops endpoints live at the ROOT, not under /api/v1 (path-level server override).
   /healthz:
+    servers:
+      - url: http://localhost:8080
+        description: Root path on the load balancer and on each instance
     get:
       summary: Liveness probe
       operationId: livenessProbe
@@ -474,6 +478,9 @@ paths:
                     example: unhealthy
 
   /readyz:
+    servers:
+      - url: http://localhost:8080
+        description: Root path on the load balancer and on each instance
     get:
       summary: Readiness probe (DB & Redis ping)
       operationId: readinessProbe
@@ -492,6 +499,9 @@ paths:
           description: Dependencies not reachable
 
   /metrics:
+    servers:
+      - url: http://localhost:8080
+        description: Scraped directly per instance; Nginx must NOT expose this publicly
     get:
       summary: Prometheus metrics endpoint
       operationId: getPrometheusMetrics

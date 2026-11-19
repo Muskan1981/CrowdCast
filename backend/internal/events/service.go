@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/crowdcast/crowdcast/internal/metrics"
 	"github.com/crowdcast/crowdcast/internal/store/postgres"
 	redisstore "github.com/crowdcast/crowdcast/internal/store/redis"
 	"github.com/redis/go-redis/v9"
@@ -154,13 +155,13 @@ func (s *Service) GetEvent(ctx context.Context, eventID string) (*EventDetails, 
 	}
 
 	return &EventDetails{
-		ID:               pgEvent.ID,
-		EventNumber:      pgEvent.EventNumber,
-		Title:            pgEvent.Title,
-		TitleMain:        pgEvent.TitleMain,
-		Subtitle:         pgEvent.Subtitle,
-		SessionCode:      pgEvent.SessionCode,
-		Description:      pgEvent.Description,
+		ID:          pgEvent.ID,
+		EventNumber: pgEvent.EventNumber,
+		Title:       pgEvent.Title,
+		TitleMain:   pgEvent.TitleMain,
+		Subtitle:    pgEvent.Subtitle,
+		SessionCode: pgEvent.SessionCode,
+		Description: pgEvent.Description,
 		Host: HostInfo{
 			Name:         pgEvent.HostName,
 			AvatarLetter: pgEvent.HostAvatarLetter,
@@ -287,7 +288,7 @@ func (s *Service) TransitionEvent(ctx context.Context, eventID string, action Ev
 	}
 	payloadBytes, _ := json.Marshal(msg)
 	channel := redisstore.EventChannelKey(eventID)
-	_ = s.redisClient.Publish(ctx, channel, payloadBytes).Err()
+	_ = s.redisClient.Publish(ctx, channel, metrics.StampPublish(payloadBytes, time.Now())).Err()
 
 	return string(nextStatus), nil
 }

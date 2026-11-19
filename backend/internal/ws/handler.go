@@ -12,6 +12,7 @@ import (
 	"github.com/crowdcast/crowdcast/internal/auth"
 	"github.com/crowdcast/crowdcast/internal/events"
 	"github.com/crowdcast/crowdcast/internal/hub"
+	"github.com/crowdcast/crowdcast/internal/metrics"
 	"github.com/crowdcast/crowdcast/internal/presence"
 )
 
@@ -103,9 +104,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		OriginPatterns: []string{"*"},
 	})
 	if err != nil {
+		metrics.Default().AppErrors.WithLabelValues("ws_upgrade").Inc()
 		slog.Error("websocket upgrade failed", "error", err)
 		return
 	}
+
+	m := metrics.Default()
+	m.WSActive.Inc()
+	defer m.WSActive.Dec()
 
 	client := NewClient(
 		claims.UserID,

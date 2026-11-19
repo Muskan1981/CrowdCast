@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crowdcast/crowdcast/internal/hub"
+	"github.com/crowdcast/crowdcast/internal/metrics"
 	"github.com/crowdcast/crowdcast/internal/store/postgres"
 	redisstore "github.com/crowdcast/crowdcast/internal/store/redis"
 	"github.com/redis/go-redis/v9"
@@ -23,11 +24,11 @@ var (
 
 var AllowedEmojis = map[string]bool{
 	"❤️": true,
-	"🔥": true,
-	"👏": true,
-	"😍": true,
-	"⚡": true,
-	"🎉": true,
+	"🔥":  true,
+	"👏":  true,
+	"😍":  true,
+	"⚡":  true,
+	"🎉":  true,
 }
 
 type ReactionBatchMessage struct {
@@ -110,6 +111,7 @@ func (s *Service) RecordReaction(ctx context.Context, eventID, userID, emoji str
 	s.rollups[eventID][emoji]++
 	s.rollupMu.Unlock()
 
+	metrics.Default().Reactions.WithLabelValues(emoji).Inc()
 	return nil
 }
 

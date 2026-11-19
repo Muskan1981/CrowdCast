@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crowdcast/crowdcast/internal/metrics"
 	redisstore "github.com/crowdcast/crowdcast/internal/store/redis"
 	"github.com/redis/go-redis/v9"
 )
@@ -82,6 +83,7 @@ func (r *Room) run() {
 				if !client.Send(msg) {
 					// Client's buffer was full (slow consumer)
 					go func(c Client) {
+						metrics.Default().WSDropped.Inc()
 						c.Close(1008, "slow consumer")
 						r.unregister <- c
 					}(client)
@@ -107,6 +109,7 @@ func (r *Room) listenRedis(ctx context.Context, pubsub *redis.PubSub) {
 				return
 			}
 			if msg != nil && len(msg.Payload) > 0 {
+				metrics.ObservePubSubLag([]byte(msg.Payload), time.Now())
 				// Fan out Redis payload to local clients
 				select {
 				case r.broadcast <- []byte(msg.Payload):
@@ -144,7 +147,7 @@ func (r *Room) BroadcastLocalPayload(ctx context.Context, payload any) error {
 		return err
 	}
 	channelName := redisstore.EventChannelKey(r.eventID)
-	return r.rdb.Publish(ctx, channelName, data).Err()
+	return r.rdb.Publish(ctx, channelName, metrics.StampPublish(data, time.Now())).Err()
 }
 
 // BroadcastDirect sends directly to local clients (e.g. for presence tick).
