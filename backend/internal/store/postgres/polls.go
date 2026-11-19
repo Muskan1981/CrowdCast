@@ -17,6 +17,7 @@ type PollRepository interface {
 	Create(ctx context.Context, poll *Poll, options []string) error
 	Vote(ctx context.Context, pollID, userID string, optionIndex int) error
 	HasUserVoted(ctx context.Context, pollID, userID string) (bool, int, error)
+	Activate(ctx context.Context, id string) error
 	Close(ctx context.Context, id string) error
 }
 
@@ -211,6 +212,18 @@ func (r *pollRepo) HasUserVoted(ctx context.Context, pollID, userID string) (boo
 		return false, -1, fmt.Errorf("check user vote failed: %w", err)
 	}
 	return true, optionIndex, nil
+}
+
+func (r *pollRepo) Activate(ctx context.Context, id string) error {
+	query := `UPDATE polls SET status = 'active' WHERE id = $1`
+	tag, err := r.pool.Exec(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("activate poll failed: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *pollRepo) Close(ctx context.Context, id string) error {

@@ -5,6 +5,8 @@ bin/
 *.dll
 *.so
 *.dylib
+api-linux
+/backend/api-linux
 
 # Test artifacts
 *.test
