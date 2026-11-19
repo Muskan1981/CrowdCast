@@ -15,9 +15,18 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/crowdcast/crowdcast/internal/auth"
+	"github.com/crowdcast/crowdcast/internal/chat"
 	"github.com/crowdcast/crowdcast/internal/config"
+	"github.com/crowdcast/crowdcast/internal/events"
+	"github.com/crowdcast/crowdcast/internal/hub"
 	"github.com/crowdcast/crowdcast/internal/middleware"
+	"github.com/crowdcast/crowdcast/internal/polls"
+	"github.com/crowdcast/crowdcast/internal/presence"
+	"github.com/crowdcast/crowdcast/internal/reactions"
 	"github.com/crowdcast/crowdcast/internal/store/postgres"
+	redisstore "github.com/crowdcast/crowdcast/internal/store/redis"
+	"github.com/crowdcast/crowdcast/internal/ws"
 )
 
 func main() {
@@ -149,7 +158,14 @@ func main() {
 	}
 	defer pgPool.Close()
 
-	router := setupRouter(cfg, logger, pgPool)
+	redisClient, err := redisstore.NewClient(dbCtx, cfg.RedisURL)
+	if err != nil {
+		logger.Error("failed to connect to redis", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer redisClient.Close()
+
+	router, hubInstance := setupRouter(cfg, logger, pgPool, redisClient)
 
 	server := &http.Server{
 		Addr:         cfg.HTTPAddr,
@@ -178,7 +194,11 @@ func main() {
 	case sig := <-shutdown:
 		logger.Info("shutdown signal received", slog.String("signal", sig.String()))
 
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		if hubInstance != nil {
+			hubInstance.Drain(5 * time.Second)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		if err := server.Shutdown(ctx); err != nil {
@@ -190,7 +210,7 @@ func main() {
 	}
 }
 
-func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool) *chi.Mux {
+func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool, rdb *redisstore.Client) (*chi.Mux, *hub.Hub) {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -225,6 +245,18 @@ func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool) 
 			return
 		}
 
+		if rdb != nil {
+			if err := rdb.Ping(ctx); err != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"ready":       false,
+					"instance_id": cfg.InstanceID,
+					"error":       fmt.Sprintf("redis ping failed: %v", err),
+				})
+				return
+			}
+		}
+
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"ready":       true,
@@ -232,6 +264,63 @@ func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool) 
 			"timestamp":   time.Now().UTC().Format(time.RFC3339),
 		})
 	})
+
+	// Services and repositories
+	var viewerRepo postgres.ViewerRepository
+	var eventRepo postgres.EventRepository
+	var activityRepo postgres.ActivityRepository
+	var chatRepo postgres.ChatRepository
+	var rxRepo postgres.ReactionRepository
+	var pollRepo postgres.PollRepository
+	if pgPool != nil {
+		viewerRepo = postgres.NewViewerRepository(pgPool)
+		eventRepo = postgres.NewEventRepository(pgPool)
+		activityRepo = postgres.NewActivityRepository(pgPool)
+		chatRepo = postgres.NewChatRepository(pgPool)
+		rxRepo = postgres.NewReactionRepository(pgPool)
+		pollRepo = postgres.NewPollRepository(pgPool)
+	}
+
+	tokenService := auth.NewTokenService(cfg.JWTSecret)
+	authHandler := auth.NewHandler(tokenService, viewerRepo)
+	eventsService := events.NewService(rdb, eventRepo, activityRepo)
+	eventsHandler := events.NewHandler(eventsService)
+
+	var presenceSvc *presence.Service
+	var hubInstance *hub.Hub
+	if rdb != nil {
+		presenceSvc = presence.NewService(rdb, viewerRepo, eventRepo)
+		hubInstance = hub.NewHub(rdb, presenceSvc)
+	}
+
+	rxService := reactions.NewService(rdb, rxRepo, hubInstance, cfg.ReactionBatchMs)
+	rxHandler := reactions.NewHandler(rxService)
+
+	chatService := chat.NewService(rdb, chatRepo, hubInstance, cfg.ChatRateLimit)
+	chatHandler := chat.NewHandler(chatService)
+
+	pollService := polls.NewService(rdb, pollRepo, hubInstance)
+	pollHandler := polls.NewHandler(pollService)
+
+	wsHandler := ws.NewHandler(
+		tokenService,
+		hubInstance,
+		presenceSvc,
+		eventsService,
+		chatService,
+		rxService,
+		pollService,
+		int64(cfg.WSMaxConns),
+		cfg.ChatRateLimit,
+		cfg.InstanceID,
+	)
+
+	// WebSocket endpoints
+	r.Get("/ws", wsHandler.ServeHTTP)
+	r.Get("/api/v1/ws", wsHandler.ServeHTTP)
+
+	adminMiddleware := auth.AdminMiddleware(cfg.AdminAPIKey, tokenService)
+	viewerAuthMiddleware := auth.ViewerAuthMiddleware(tokenService, false)
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
@@ -241,7 +330,55 @@ func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool) 
 				"instance_id": cfg.InstanceID,
 			})
 		})
+
+		// Session registration
+		api.Post("/session", authHandler.CreateSession)
+
+		// Events
+		api.Get("/events/{id}", eventsHandler.GetEvent)
+
+		// Reactions (REST fallback)
+		api.With(viewerAuthMiddleware).Post("/events/{id}/reactions", rxHandler.SendReaction)
+
+		// Chat
+		api.Get("/events/{id}/chat", chatHandler.GetHistory)
+		api.With(viewerAuthMiddleware).Post("/events/{id}/chat", chatHandler.SendMessage)
+
+		// Polls
+		api.Get("/events/{id}/polls/active", pollHandler.GetActivePoll)
+		api.With(viewerAuthMiddleware).Post("/polls/{pid}/vote", pollHandler.CastVote)
+
+		// Admin lifecycle actions & poll management
+		api.Group(func(admin chi.Router) {
+			admin.Use(adminMiddleware)
+			admin.Post("/events/{id}/{action}", eventsHandler.HandleLifecycleAction)
+			admin.Post("/events/{id}/start", func(w http.ResponseWriter, r *http.Request) {
+				rctx := chi.RouteContext(r.Context())
+				rctx.URLParams.Add("action", "start")
+				eventsHandler.HandleLifecycleAction(w, r)
+			})
+			admin.Post("/events/{id}/pause", func(w http.ResponseWriter, r *http.Request) {
+				rctx := chi.RouteContext(r.Context())
+				rctx.URLParams.Add("action", "pause")
+				eventsHandler.HandleLifecycleAction(w, r)
+			})
+			admin.Post("/events/{id}/resume", func(w http.ResponseWriter, r *http.Request) {
+				rctx := chi.RouteContext(r.Context())
+				rctx.URLParams.Add("action", "resume")
+				eventsHandler.HandleLifecycleAction(w, r)
+			})
+			admin.Post("/events/{id}/end", func(w http.ResponseWriter, r *http.Request) {
+				rctx := chi.RouteContext(r.Context())
+				rctx.URLParams.Add("action", "end")
+				eventsHandler.HandleLifecycleAction(w, r)
+			})
+
+			// Admin poll controls
+			admin.Post("/events/{id}/polls", pollHandler.AdminCreatePoll)
+			admin.Post("/polls/{pid}/activate", pollHandler.AdminActivatePoll)
+			admin.Post("/polls/{pid}/close", pollHandler.AdminClosePoll)
+		})
 	})
 
-	return r
+	return r, hubInstance
 }

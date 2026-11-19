@@ -20,7 +20,7 @@ func TestHealthzEndpoint(t *testing.T) {
 		AllowedOrigins: []string{"*"},
 	}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	router := setupRouter(cfg, logger, nil)
+	router, _ := setupRouter(cfg, logger, nil, nil)
 
 	req := httptest.NewRequest("GET", "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -52,7 +52,7 @@ func TestReadyzEndpoint(t *testing.T) {
 		AllowedOrigins: []string{"*"},
 	}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	router := setupRouter(cfg, logger, nil)
+	router, _ := setupRouter(cfg, logger, nil, nil)
 
 	req := httptest.NewRequest("GET", "/readyz", nil)
 	rec := httptest.NewRecorder()

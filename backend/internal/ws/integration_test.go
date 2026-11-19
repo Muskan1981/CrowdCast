@@ -169,3 +169,72 @@ func TestMultiClientRealtimeBroadcast(t *testing.T) {
 	assert.Equal(t, "Fanout test across 3 clients!", readChat(conn2))
 	assert.Equal(t, "Fanout test across 3 clients!", readChat(conn3))
 }
+
+func TestWebSocketReactionsAndPolls(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	token, _ := getSessionToken(t, "Interaction Tester")
+	conn, _, err := websocket.Dial(ctx, fmt.Sprintf("ws://localhost:8080/ws?event=cc-0826&token=%s", token), nil)
+	require.NoError(t, err)
+	defer conn.Close(websocket.StatusNormalClosure, "done")
+
+	// Consume welcome
+	_, _, err = conn.Read(ctx)
+	require.NoError(t, err)
+
+	// Send reaction over WS
+	reactMsg := []byte(`{"t":"reaction","emoji":"🎉"}`)
+	err = conn.Write(ctx, websocket.MessageText, reactMsg)
+	require.NoError(t, err)
+
+	// Check for reaction_batch within flusher window (250ms)
+	foundReaction := false
+	for i := 0; i < 10; i++ {
+		rCtx, rCancel := context.WithTimeout(ctx, 2*time.Second)
+		_, msgBytes, err := conn.Read(rCtx)
+		rCancel()
+		if err != nil {
+			break
+		}
+		var m map[string]any
+		_ = json.Unmarshal(msgBytes, &m)
+		if m["t"] == "reaction_batch" {
+			foundReaction = true
+			reactions, ok := m["reactions"].(map[string]any)
+			require.True(t, ok)
+			assert.Contains(t, reactions, "🎉")
+			assert.NotZero(t, m["total"])
+			break
+		}
+	}
+	assert.True(t, foundReaction, "expected reaction_batch message")
+
+	// Send vote over WS
+	voteMsg := []byte(`{"t":"vote","poll":"poll-01","option":2}`)
+	err = conn.Write(ctx, websocket.MessageText, voteMsg)
+	require.NoError(t, err)
+
+	// Check for poll_update
+	foundPollUpdate := false
+	for i := 0; i < 10; i++ {
+		rCtx, rCancel := context.WithTimeout(ctx, 2*time.Second)
+		_, msgBytes, err := conn.Read(rCtx)
+		rCancel()
+		if err != nil {
+			t.Logf("poll read error: %v", err)
+			break
+		}
+		t.Logf("poll read msg: %s", string(msgBytes))
+		var m map[string]any
+		_ = json.Unmarshal(msgBytes, &m)
+		if m["t"] == "poll_update" {
+			foundPollUpdate = true
+			assert.Equal(t, "poll-01", m["poll_id"])
+			assert.NotNil(t, m["votes"])
+			assert.NotNil(t, m["percentages"])
+			break
+		}
+	}
+	assert.True(t, foundPollUpdate, "expected poll_update message")
+}
