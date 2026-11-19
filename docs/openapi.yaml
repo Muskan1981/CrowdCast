@@ -1,0 +1,886 @@
+openapi: 3.1.0
+info:
+  title: CrowdCast API
+  description: >
+    Real-time virtual event and concert platform API. Powers the stateless Go backend
+    instances behind an Nginx load balancer.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Nginx Load Balancer / API Gateway
+  - url: http://localhost:8081/api/v1
+    description: Backend Instance 01
+  - url: http://localhost:8082/api/v1
+    description: Backend Instance 02
+  - url: http://localhost:8083/api/v1
+    description: Backend Instance 03
+
+paths:
+  /session:
+    post:
+      summary: Initialize anonymous viewer session
+      operationId: createSession
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name:
+                  type: string
+                  example: Aarav Mehta
+                city:
+                  type: string
+                  example: Mumbai
+      responses:
+        '200':
+          description: Session created with JWT and viewer profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+
+  /events/{id}:
+    get:
+      summary: Get event metadata and live state
+      operationId: getEvent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            example: cc-0826
+      responses:
+        '200':
+          description: Event details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventDetails'
+        '404':
+          $ref: '#/components/responses/ErrorResponse'
+
+  /events/{id}/start:
+    post:
+      summary: Start scheduled event (Admin)
+      operationId: startEvent
+      security:
+        - AdminKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Event started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventLifecycleResponse'
+        '403':
+          $ref: '#/components/responses/ErrorResponse'
+
+  /events/{id}/pause:
+    post:
+      summary: Pause live event (Admin)
+      operationId: pauseEvent
+      security:
+        - AdminKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Event paused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventLifecycleResponse'
+
+  /events/{id}/resume:
+    post:
+      summary: Resume paused event (Admin)
+      operationId: resumeEvent
+      security:
+        - AdminKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Event resumed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventLifecycleResponse'
+
+  /events/{id}/end:
+    post:
+      summary: End live event stream (Admin)
+      operationId: endEvent
+      security:
+        - AdminKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Event ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventLifecycleResponse'
+
+  /events/{id}/chat:
+    get:
+      summary: Get chat history
+      operationId: getChatHistory
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+      responses:
+        '200':
+          description: List of recent chat messages
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatHistoryResponse'
+    post:
+      summary: Send chat message (REST fallback)
+      operationId: sendChatMessage
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - text
+              properties:
+                text:
+                  type: string
+                  maxLength: 280
+                  example: The visuals are INSANE 🔥
+      responses:
+        '201':
+          description: Chat message accepted and broadcast
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatMessage'
+        '429':
+          $ref: '#/components/responses/ErrorResponse'
+
+  /events/{id}/reactions:
+    post:
+      summary: Send emoji reaction (REST fallback)
+      operationId: sendReaction
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - emoji
+              properties:
+                emoji:
+                  type: string
+                  enum: ['❤️', '🔥', '👏', '😍', '⚡', '🎉']
+                  example: 🔥
+      responses:
+        '200':
+          description: Reaction counted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  emoji:
+                    type: string
+                  reactions_sent:
+                    type: integer
+
+  /events/{id}/polls/active:
+    get:
+      summary: Get currently active poll and results
+      operationId: getActivePoll
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Active poll details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PollDetails'
+
+  /polls/{pid}/vote:
+    post:
+      summary: Cast vote on a poll
+      operationId: castVote
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: pid
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - option
+              properties:
+                option:
+                  type: integer
+                  minimum: 0
+                  example: 0
+      responses:
+        '200':
+          description: Vote recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoteResponse'
+        '409':
+          $ref: '#/components/responses/ErrorResponse'
+
+  /events/{id}/stats/overview:
+    get:
+      summary: Overview page statistics and aggregated state
+      operationId: getOverviewStats
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Overview dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverviewStats'
+
+  /events/{id}/stats/traffic:
+    get:
+      summary: Traffic timeseries data for Recharts chart
+      operationId: getTrafficSeries
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: range
+          in: query
+          required: false
+          schema:
+            type: string
+            default: 60m
+      responses:
+        '200':
+          description: Array of time bucket points
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TrafficPoint'
+
+  /events/{id}/stats/audience:
+    get:
+      summary: Audience analytics data
+      operationId: getAudienceStats
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Audience statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AudienceStats'
+
+  /infra/nodes:
+    get:
+      summary: Node fleet table and health metrics
+      operationId: getInfraNodes
+      responses:
+        '200':
+          description: List of backend instances and metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InfraNodesResponse'
+
+  /admin/nodes/{name}/fail:
+    post:
+      summary: Chaos inject failure on specific node
+      operationId: failNode
+      security:
+        - AdminKeyAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            example: crowdcast-api-02
+      responses:
+        '200':
+          description: Failure injected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChaosActionResponse'
+
+  /admin/nodes/{name}/restore:
+    post:
+      summary: Restore healthy status on specific node
+      operationId: restoreNode
+      security:
+        - AdminKeyAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            example: crowdcast-api-02
+      responses:
+        '200':
+          description: Node restored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChaosActionResponse'
+
+  /admin/nodes/{name}/latency:
+    post:
+      summary: Inject artificial latency on specific node
+      operationId: injectLatency
+      security:
+        - AdminKeyAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - latency_ms
+              properties:
+                latency_ms:
+                  type: integer
+                  example: 300
+      responses:
+        '200':
+          description: Latency rule applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChaosActionResponse'
+
+  /healthz:
+    get:
+      summary: Liveness probe
+      operationId: livenessProbe
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+        '503':
+          description: Degraded / Chaos fail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: unhealthy
+
+  /readyz:
+    get:
+      summary: Readiness probe (DB & Redis ping)
+      operationId: readinessProbe
+      responses:
+        '200':
+          description: Ready to serve traffic
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ready:
+                    type: boolean
+                    example: true
+        '503':
+          description: Dependencies not reachable
+
+  /metrics:
+    get:
+      summary: Prometheus metrics endpoint
+      operationId: getPrometheusMetrics
+      responses:
+        '200':
+          description: Prometheus text format metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    AdminKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Admin-Key
+
+  responses:
+    ErrorResponse:
+      description: Standard API Error
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - error
+            properties:
+              error:
+                type: object
+                required:
+                  - code
+                  - message
+                properties:
+                  code:
+                    type: string
+                    example: BAD_REQUEST
+                  message:
+                    type: string
+                    example: Invalid parameter
+
+  schemas:
+    SessionResponse:
+      type: object
+      required:
+        - token
+        - viewer
+      properties:
+        token:
+          type: string
+        viewer:
+          type: object
+          properties:
+            id:
+              type: string
+            display_name:
+              type: string
+            city:
+              type: string
+            color:
+              type: string
+              enum: [mint, peach, lilac, yellow]
+            first_seen_at:
+              type: string
+              format: date-time
+
+    EventDetails:
+      type: object
+      properties:
+        id:
+          type: string
+        event_number:
+          type: string
+        title:
+          type: string
+        title_main:
+          type: string
+        subtitle:
+          type: string
+        session_code:
+          type: string
+        description:
+          type: string
+        host:
+          type: object
+          properties:
+            name:
+              type: string
+            avatar_letter:
+              type: string
+        stage:
+          type: object
+          properties:
+            name:
+              type: string
+            resolution:
+              type: string
+        date_eyebrow:
+          type: string
+        status:
+          type: string
+          enum: [scheduled, live, paused, ended]
+        started_at:
+          type: string
+          format: date-time
+        live_for_formatted:
+          type: string
+        live_for_seconds:
+          type: integer
+        peak_audience:
+          type: integer
+        current_attendees:
+          type: integer
+        total_reactions:
+          type: integer
+
+    EventLifecycleResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+
+    ChatMessage:
+      type: object
+      required:
+        - id
+        - name
+        - text
+        - time
+        - color
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        text:
+          type: string
+        time:
+          type: string
+        color:
+          type: string
+          enum: [mint, peach, lilac, yellow]
+        created_at:
+          type: string
+          format: date-time
+
+    ChatHistoryResponse:
+      type: object
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+        total_messages:
+          type: integer
+
+    PollDetails:
+      type: object
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+        status:
+          type: string
+          enum: [active, closed]
+        options:
+          type: array
+          items:
+            type: string
+        votes:
+          type: array
+          items:
+            type: integer
+        percentages:
+          type: array
+          items:
+            type: integer
+        total_votes:
+          type: integer
+        user_voted_option:
+          type: integer
+          nullable: true
+
+    VoteResponse:
+      type: object
+      properties:
+        poll_id:
+          type: string
+        selected_option:
+          type: integer
+        votes:
+          type: array
+          items:
+            type: integer
+        percentages:
+          type: array
+          items:
+            type: integer
+        total_votes:
+          type: integer
+
+    TrafficPoint:
+      type: object
+      required:
+        - time
+        - requests
+      properties:
+        time:
+          type: string
+          example: '18:00'
+        requests:
+          type: integer
+          example: 320
+
+    ServerRow:
+      type: object
+      required:
+        - name
+        - zone
+        - weight
+        - requests
+        - cpu
+        - memory
+        - status
+        - color
+      properties:
+        name:
+          type: string
+          example: crowdcast-api-01
+        zone:
+          type: string
+          example: Primary node
+        weight:
+          type: integer
+          example: 50
+        requests:
+          type: string
+          example: '6,420'
+        cpu:
+          type: integer
+          example: 42
+        memory:
+          type: integer
+          example: 58
+        status:
+          type: string
+          example: Healthy
+        color:
+          type: string
+          enum: [mint, peach, lilac, yellow]
+
+    MetricCardData:
+      type: object
+      properties:
+        value:
+          type: string
+        raw:
+          type: integer
+        change:
+          type: string
+        foot:
+          type: string
+        tone:
+          type: string
+
+    OverviewStats:
+      type: object
+      properties:
+        event:
+          type: object
+        metrics:
+          type: object
+          properties:
+            live_attendees:
+              $ref: '#/components/schemas/MetricCardData'
+            reactions_sent:
+              $ref: '#/components/schemas/MetricCardData'
+            avg_response_time:
+              $ref: '#/components/schemas/MetricCardData'
+            requests_per_sec:
+              $ref: '#/components/schemas/MetricCardData'
+        traffic_summary:
+          type: object
+        distribution:
+          type: object
+        server_rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServerRow'
+        activity:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              title:
+                type: string
+              description:
+                type: string
+              time_ago:
+                type: string
+              icon:
+                type: string
+              tone:
+                type: string
+
+    AudienceStats:
+      type: object
+      properties:
+        metrics:
+          type: object
+          properties:
+            total_attendees:
+              $ref: '#/components/schemas/MetricCardData'
+            returning_audience:
+              $ref: '#/components/schemas/MetricCardData'
+            avg_watch_time:
+              $ref: '#/components/schemas/MetricCardData'
+            chat_messages:
+              $ref: '#/components/schemas/MetricCardData'
+        city_mix:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              percentage:
+                type: string
+        top_reactions:
+          type: array
+          items:
+            type: object
+            properties:
+              emoji:
+                type: string
+              name:
+                type: string
+              subtitle:
+                type: string
+              count:
+                type: string
+
+    InfraNodesResponse:
+      type: object
+      properties:
+        fleet_status:
+          type: string
+        degraded:
+          type: boolean
+        metrics:
+          type: object
+        server_rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServerRow'
+        monitoring_services:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              subtitle:
+                type: string
+              status:
+                type: string
+              good:
+                type: boolean
+
+    ChaosActionResponse:
+      type: object
+      properties:
+        node:
+          type: string
+        action:
+          type: string
+        success:
+          type: boolean
+        current_status:
+          type: string
