@@ -10,6 +10,11 @@ COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
 COPY . .
+# Build-time settings. Empty VITE_API_URL means same origin, which is how nginx serves it.
+# VITE_ADMIN_KEY is for the demo's chaos buttons only: it ends up in the public bundle.
+ARG VITE_API_URL=""
+ARG VITE_ADMIN_KEY=""
+ARG VITE_USE_MOCKS="false"
 RUN npm run build
 
 FROM nginx:1.27-alpine
