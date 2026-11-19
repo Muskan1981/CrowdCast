@@ -53,6 +53,7 @@ services:
       REACTION_BATCH_MS: "250"
       CHAT_RATE_LIMIT: "1500ms"
       LOG_LEVEL: info
+      RUN_MIGRATIONS: "true"
     ports:
       - "8080:8080"
     depends_on:

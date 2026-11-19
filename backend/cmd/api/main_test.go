@@ -20,7 +20,7 @@ func TestHealthzEndpoint(t *testing.T) {
 		AllowedOrigins: []string{"*"},
 	}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	router := setupRouter(cfg, logger)
+	router := setupRouter(cfg, logger, nil)
 
 	req := httptest.NewRequest("GET", "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -52,14 +52,15 @@ func TestReadyzEndpoint(t *testing.T) {
 		AllowedOrigins: []string{"*"},
 	}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	router := setupRouter(cfg, logger)
+	router := setupRouter(cfg, logger, nil)
 
 	req := httptest.NewRequest("GET", "/readyz", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", rec.Code)
+	// Since pgPool is nil in unit test, expected status is 503 Service Unavailable
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503 for nil db pool, got %d", rec.Code)
 	}
 
 	var body map[string]any
@@ -67,8 +68,8 @@ func TestReadyzEndpoint(t *testing.T) {
 		t.Fatalf("failed to parse json response: %v", err)
 	}
 
-	if body["ready"] != true {
-		t.Errorf("expected ready true, got %v", body["ready"])
+	if body["ready"] != false {
+		t.Errorf("expected ready false, got %v", body["ready"])
 	}
 	if body["instance_id"] != "crowdcast-api-02" {
 		t.Errorf("expected instance_id 'crowdcast-api-02', got %v", body["instance_id"])

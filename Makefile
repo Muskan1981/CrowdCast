@@ -1,6 +1,6 @@
 COMPOSE_FILE ?= deploy/docker-compose.yml
 
-.PHONY: all up down logs build test lint fmt migrate-up migrate-down loadgen spike chaos-node chaos-redis
+.PHONY: all up down logs build test lint fmt migrate-up migrate-down seed loadgen spike chaos-node chaos-redis
 
 all: build test
 
@@ -30,20 +30,13 @@ fmt:
 	cd backend && go fmt ./...
 
 migrate-up:
-	@echo "Running migrations up..."
-	@if [ -d "backend/migrations" ]; then \
-		echo "Applying migrations"; \
-	else \
-		echo "Migrations directory not yet populated"; \
-	fi
+	docker compose -f $(COMPOSE_FILE) exec api /api -migrate-up
 
 migrate-down:
-	@echo "Running migrations down..."
-	@if [ -d "backend/migrations" ]; then \
-		echo "Rolling back migrations"; \
-	else \
-		echo "Migrations directory not yet populated"; \
-	fi
+	docker compose -f $(COMPOSE_FILE) exec api /api -migrate-down
+
+seed:
+	docker compose -f $(COMPOSE_FILE) exec api /api seed
 
 loadgen:
 	cd backend && go run ./cmd/loadgen run --scenario steady --users 500 --target http://localhost:8080

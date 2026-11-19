@@ -24,6 +24,7 @@ type Config struct {
 	ReactionBatchMs time.Duration `json:"reaction_batch_ms"`
 	ChatRateLimit   time.Duration `json:"chat_rate_limit"`
 	LogLevel        string        `json:"log_level"`
+	RunMigrations   bool          `json:"run_migrations"`
 }
 
 // Load reads configuration from environment variables with safe defaults and validates constraints.
@@ -43,6 +44,7 @@ func Load() (*Config, error) {
 		ReactionBatchMs: time.Duration(getEnvInt("REACTION_BATCH_MS", 250)) * time.Millisecond,
 		ChatRateLimit:   getEnvDuration("CHAT_RATE_LIMIT", 1500*time.Millisecond),
 		LogLevel:        strings.ToLower(getEnv("LOG_LEVEL", "info")),
+		RunMigrations:   getEnvBool("RUN_MIGRATIONS", true),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -86,6 +88,19 @@ func (c *Config) Validate() error {
 func getEnv(key, defaultVal string) string {
 	if val, ok := os.LookupEnv(key); ok && strings.TrimSpace(val) != "" {
 		return strings.TrimSpace(val)
+	}
+	return defaultVal
+}
+
+func getEnvBool(key string, defaultVal bool) bool {
+	if val, ok := os.LookupEnv(key); ok {
+		trimmed := strings.ToLower(strings.TrimSpace(val))
+		if trimmed == "true" || trimmed == "1" || trimmed == "yes" {
+			return true
+		}
+		if trimmed == "false" || trimmed == "0" || trimmed == "no" {
+			return false
+		}
 	}
 	return defaultVal
 }

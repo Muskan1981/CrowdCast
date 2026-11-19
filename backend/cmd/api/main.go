@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/crowdcast/crowdcast/internal/config"
 	"github.com/crowdcast/crowdcast/internal/middleware"
+	"github.com/crowdcast/crowdcast/internal/store/postgres"
 )
 
 func main() {
@@ -32,6 +34,65 @@ func main() {
 		if err != nil || resp.StatusCode != http.StatusOK {
 			os.Exit(1)
 		}
+		os.Exit(0)
+	}
+
+	if len(os.Args) > 1 && (os.Args[1] == "-migrate-up" || os.Args[1] == "migrate-up") {
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to load configuration: %v\n", err)
+			os.Exit(1)
+		}
+		if err := postgres.MigrateUp(cfg.DatabaseURL); err != nil {
+			fmt.Fprintf(os.Stderr, "migration up failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Migrations applied successfully.")
+		os.Exit(0)
+	}
+
+	if len(os.Args) > 1 && (os.Args[1] == "-migrate-down" || os.Args[1] == "migrate-down") {
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to load configuration: %v\n", err)
+			os.Exit(1)
+		}
+		if err := postgres.MigrateDown(cfg.DatabaseURL); err != nil {
+			fmt.Fprintf(os.Stderr, "migration down failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Migrations rolled back successfully.")
+		os.Exit(0)
+	}
+
+	if len(os.Args) > 1 && (os.Args[1] == "seed" || os.Args[1] == "--seed" || os.Args[1] == "-seed") {
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to load configuration: %v\n", err)
+			os.Exit(1)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if err := postgres.MigrateUp(cfg.DatabaseURL); err != nil {
+			fmt.Fprintf(os.Stderr, "migration failed before seeding: %v\n", err)
+			os.Exit(1)
+		}
+
+		pool, err := postgres.NewPool(ctx, cfg.DatabaseURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "database connection failed: %v\n", err)
+			os.Exit(1)
+		}
+		defer pool.Close()
+
+		if err := postgres.Seed(ctx, pool); err != nil {
+			fmt.Fprintf(os.Stderr, "seeding failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println("Database seeded successfully with event #CC-0826 and active poll.")
 		os.Exit(0)
 	}
 
@@ -69,7 +130,26 @@ func main() {
 		slog.String("addr", cfg.HTTPAddr),
 	)
 
-	router := setupRouter(cfg, logger)
+	if cfg.RunMigrations {
+		logger.Info("applying database migrations")
+		if err := postgres.MigrateUp(cfg.DatabaseURL); err != nil {
+			logger.Error("failed to apply migrations", slog.Any("error", err))
+			os.Exit(1)
+		}
+		logger.Info("database migrations applied successfully")
+	}
+
+	dbCtx, dbCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer dbCancel()
+
+	pgPool, err := postgres.NewPool(dbCtx, cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("failed to connect to postgres", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer pgPool.Close()
+
+	router := setupRouter(cfg, logger, pgPool)
 
 	server := &http.Server{
 		Addr:         cfg.HTTPAddr,
@@ -110,7 +190,7 @@ func main() {
 	}
 }
 
-func setupRouter(cfg *config.Config, logger *slog.Logger) *chi.Mux {
+func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -131,8 +211,20 @@ func setupRouter(cfg *config.Config, logger *slog.Logger) *chi.Mux {
 	})
 
 	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		// Ready probe: stub for now; verifies instance is accepting traffic
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+
+		if err := postgres.Ping(ctx, pgPool); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ready":       false,
+				"instance_id": cfg.InstanceID,
+				"error":       fmt.Sprintf("database ping failed: %v", err),
+			})
+			return
+		}
+
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"ready":       true,
