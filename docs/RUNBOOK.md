@@ -73,3 +73,6 @@ its weight (50/30/20). It is expected during a node failure, because the other n
 2. If all nodes are up, check the nginx upstream weights in `deploy/nginx/nginx.conf`.
 3. Remember that nginx keeps resolved upstream addresses until it reloads. After recreating
    containers, restart nginx: `docker compose -f deploy/docker-compose.yml restart nginx`.
+
+
+ docker compose --env-file .env -f deploy/docker-compose.yml --profile load run --rm loadgen run --scenario ramp --users 500 --duration 2m --target http://nginx:8080 --summary /dev/null
