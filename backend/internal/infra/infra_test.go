@@ -113,6 +113,39 @@ func TestBuildFleetShowsMissingNodeAsOffline(t *testing.T) {
 	assert.True(t, degraded)
 }
 
+func TestBuildFleetSharesTrafficAndZeroesFailedNode(t *testing.T) {
+	live := map[string]NodeRecord{
+		"crowdcast-api-01": {Name: "crowdcast-api-01", Health: HealthHealthy, RequestsPerSec: 300},
+		"crowdcast-api-02": {Name: "crowdcast-api-02", Health: HealthFailed, RequestsPerSec: 100},
+		"crowdcast-api-03": {Name: "crowdcast-api-03", Health: HealthHealthy, RequestsPerSec: 100},
+	}
+	rows, totals, _, _ := BuildFleet(ExpectedNodes, live)
+
+	require.Len(t, rows, 3)
+	// The failed node still counted its refused requests, but it must show zero.
+	assert.Equal(t, float64(0), rows[1].RequestsPerSec)
+	assert.Equal(t, "0", rows[1].Requests)
+	assert.Equal(t, 0.0, rows[1].SharePct)
+	// The two serving nodes split the live traffic 3:1 by actual rate, not by weight.
+	assert.InDelta(t, 75.0, rows[0].SharePct, 0.001)
+	assert.InDelta(t, 25.0, rows[2].SharePct, 0.001)
+	assert.Equal(t, int64(400), totals.TotalRequests)
+}
+
+func TestBuildFleetIdleSharesFollowWeightForHealthyOnly(t *testing.T) {
+	live := map[string]NodeRecord{
+		"crowdcast-api-01": {Name: "crowdcast-api-01", Health: HealthHealthy},
+		"crowdcast-api-02": {Name: "crowdcast-api-02", Health: HealthFailed},
+		"crowdcast-api-03": {Name: "crowdcast-api-03", Health: HealthHealthy},
+	}
+	rows, _, _, _ := BuildFleet(ExpectedNodes, live)
+
+	// No traffic anywhere: healthy nodes show the intended split, the failed node shows 0.
+	assert.Equal(t, 50.0, rows[0].SharePct)
+	assert.Equal(t, 0.0, rows[1].SharePct)
+	assert.Equal(t, 20.0, rows[2].SharePct)
+}
+
 func TestBuildFleetStatusLevels(t *testing.T) {
 	all := map[string]NodeRecord{}
 	for _, e := range ExpectedNodes {

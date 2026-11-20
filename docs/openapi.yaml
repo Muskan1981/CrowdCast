@@ -750,6 +750,14 @@ components:
         requests:
           type: string
           example: '6,420'
+        requests_per_sec:
+          type: number
+          description: Live rate from the node's heartbeat. 0 unless the node is Healthy or Degraded.
+          example: 6420.0
+        share_pct:
+          type: number
+          description: Share of the fleet's live rate. Shows 0 when the fleet is idle (see idleShare).
+          example: 61.5
         cpu:
           type: integer
           example: 42

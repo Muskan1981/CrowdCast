@@ -10,14 +10,16 @@ import (
 
 // ServerRow matches ServerRow in docs/openapi.yaml.
 type ServerRow struct {
-	Name     string `json:"name"`
-	Zone     string `json:"zone"`
-	Weight   int    `json:"weight"`
-	Requests string `json:"requests"`
-	CPU      int    `json:"cpu"`
-	Memory   int    `json:"memory"`
-	Status   string `json:"status"`
-	Color    string `json:"color"`
+	Name           string  `json:"name"`
+	Zone           string  `json:"zone"`
+	Weight         int     `json:"weight"`
+	Requests       string  `json:"requests"`
+	RequestsPerSec float64 `json:"requests_per_sec"`
+	SharePct       float64 `json:"share_pct"`
+	CPU            int     `json:"cpu"`
+	Memory         int     `json:"memory"`
+	Status         string  `json:"status"`
+	Color          string  `json:"color"`
 }
 
 // FleetMetrics are the totals across the fleet.
@@ -52,25 +54,40 @@ func BuildFleet(expected []Expected, live map[string]NodeRecord) (rows []ServerR
 	allHealthy := true
 	rows = make([]ServerRow, 0, len(expected))
 
+	var fleetRPS float64
 	for _, e := range expected {
 		rec, ok := live[e.Name]
-		row := ServerRow{Name: e.Name, Zone: e.Zone, Weight: e.Weight, Requests: "0", Status: "Offline", Color: e.Color}
+		row := ServerRow{Name: e.Name, Zone: e.Zone, Weight: e.Weight, Status: "Offline", Color: e.Color}
 		if ok {
 			row.Zone = firstNonEmpty(rec.Zone, e.Zone)
-			row.Requests = commas(int64(math.Round(rec.RequestsPerSec)))
 			row.CPU = int(math.Round(rec.CPU))
 			row.Memory = int(math.Round(rec.Memory))
 			row.Status = statusLabel(rec.Health)
-			totals.TotalRequests += int64(math.Round(rec.RequestsPerSec))
 			totals.ActiveConnections += rec.Connections
+			// Only a node that is serving reports a rate. A failed or draining node
+			// still counts the requests it refuses (503s), so its rate is zeroed.
 			if rec.Health == HealthHealthy || rec.Health == HealthDegraded {
 				serving++
+				row.RequestsPerSec = rec.RequestsPerSec
+				fleetRPS += rec.RequestsPerSec
+				totals.TotalRequests += int64(math.Round(rec.RequestsPerSec))
 			}
 		}
+		row.Requests = commas(int64(math.Round(row.RequestsPerSec)))
 		if row.Status != "Healthy" {
 			allHealthy = false
 		}
 		rows = append(rows, row)
+	}
+
+	// Each serving node's share of the live fleet rate. With no traffic at all,
+	// idleShare decides what the table shows.
+	for i := range rows {
+		if fleetRPS > 0 {
+			rows[i].SharePct = rows[i].RequestsPerSec / fleetRPS * 100
+		} else {
+			rows[i].SharePct = idleShare(expected[i], rows[i].Status)
+		}
 	}
 
 	switch {
@@ -82,6 +99,17 @@ func BuildFleet(expected []Expected, live map[string]NodeRecord) (rows []ServerR
 		status = "Degraded"
 	}
 	return rows, totals, status, status != "Operational"
+}
+
+// idleShare is the traffic share shown for a node when the fleet is serving no
+// requests at all. A Healthy node shows its configured weight, so the table still
+// shows the intended split. Any other node shows 0, so an outage never looks
+// like traffic is flowing.
+func idleShare(e Expected, status string) float64 {
+	if status == "Healthy" {
+		return float64(e.Weight)
+	}
+	return 0
 }
 
 func statusLabel(health string) string {
