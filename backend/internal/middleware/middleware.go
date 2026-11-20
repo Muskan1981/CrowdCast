@@ -167,3 +167,15 @@ func Timeout(timeout time.Duration) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// InstanceHeader stamps every response with X-Instance, the ID of the node that
+// served it. Nginx copies it into X-Served-By, so the load balancer's
+// distribution can be measured from outside.
+func InstanceHeader(instanceID string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Instance", instanceID)
+			next.ServeHTTP(w, r)
+		})
+	}
+}

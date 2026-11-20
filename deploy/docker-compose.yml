@@ -1,80 +1,365 @@
+# CrowdCast production-like stack.
+#
+#   cp .env.example .env && make up
+#
+# Startup order: postgres + redis -> migrate -> seed -> api-01/02/03 -> frontend -> nginx.
+# Dev hot reload is added by docker-compose.override.yml, which Compose loads automatically.
+# Optional profiles: `alerts` (alertmanager), `load` (loadgen).
+
+name: crowdcast
+
+x-api-common: &api-common
+  build:
+    context: ../backend
+    dockerfile: Dockerfile
+    target: api
+  image: crowdcast-api:local
+  environment: &api-env
+    HTTP_ADDR: ":8080"
+    REDIS_URL: redis://redis:6379/0
+    DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change-me-postgres}@postgres:5432/${POSTGRES_DB:-crowdcast}?sslmode=disable
+    PROMETHEUS_URL: http://prometheus:9090
+    GRAFANA_URL: http://grafana:3000
+    JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+    ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env}
+    ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+    WS_MAX_CONNS: ${WS_MAX_CONNS:-10000}
+    REACTION_BATCH_MS: ${REACTION_BATCH_MS:-250}
+    CHAT_RATE_LIMIT: ${CHAT_RATE_LIMIT:-1500ms}
+    LOG_LEVEL: ${LOG_LEVEL:-info}
+    RUN_MIGRATIONS: "false"
+  depends_on:
+    seed:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "/api", "-healthcheck"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 5s
+  restart: unless-stopped
+  deploy:
+    resources:
+      limits:
+        cpus: "1.0"
+        memory: 512M
+  networks:
+    - crowdcast-net
+
 services:
+  # ---- data stores -----------------------------------------------------------
   postgres:
     image: postgres:16-alpine
     container_name: crowdcast-postgres
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: crowdcast
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-crowdcast}
     ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d crowdcast"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
     networks:
       - crowdcast-net
 
   redis:
     image: redis:7-alpine
     container_name: crowdcast-redis
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 5
-    volumes:
-      - redisdata:/data
+      retries: 10
+    restart: unless-stopped
     networks:
       - crowdcast-net
 
-  api:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-    container_name: crowdcast-api-01
-    environment:
-      INSTANCE_ID: crowdcast-api-01
-      INSTANCE_ZONE: Primary node
-      INSTANCE_WEIGHT: "50"
-      HTTP_ADDR: ":8080"
-      REDIS_URL: redis://redis:6379/0
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/crowdcast?sslmode=disable
-      PROMETHEUS_URL: http://prometheus:9090
-      JWT_SECRET: dev-crowdcast-secret-key-32chars!
-      ADMIN_API_KEY: admin-secret-key
-      ALLOWED_ORIGINS: "*"
-      WS_MAX_CONNS: "10000"
-      REACTION_BATCH_MS: "250"
-      CHAT_RATE_LIMIT: "1500ms"
-      LOG_LEVEL: info
-      RUN_MIGRATIONS: "true"
-    ports:
-      - "8080:8080"
+  # ---- one-shot jobs: schema and demo data ----------------------------------
+  migrate:
+    <<: *api-common
+    container_name: crowdcast-migrate
+    command: ["-migrate-up"]
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck: { disable: true }
+    restart: "no"
+
+  seed:
+    <<: *api-common
+    container_name: crowdcast-seed
+    command: ["seed"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
+    healthcheck: { disable: true }
+    restart: "no"
+
+  # ---- application instances (identity must match infra.ExpectedNodes) -------
+  api-01:
+    <<: *api-common
+    container_name: crowdcast-api-01
+    environment:
+      <<: *api-env
+      INSTANCE_ID: crowdcast-api-01
+      INSTANCE_ZONE: Primary node
+      INSTANCE_WEIGHT: "50"
+    ports:
+      - "8081:8080"
+
+  api-02:
+    <<: *api-common
+    container_name: crowdcast-api-02
+    environment:
+      <<: *api-env
+      INSTANCE_ID: crowdcast-api-02
+      INSTANCE_ZONE: Secondary node
+      INSTANCE_WEIGHT: "30"
+    ports:
+      - "8082:8080"
+
+  api-03:
+    <<: *api-common
+    container_name: crowdcast-api-03
+    environment:
+      <<: *api-env
+      INSTANCE_ID: crowdcast-api-03
+      INSTANCE_ZONE: Burst node
+      INSTANCE_WEIGHT: "20"
+    ports:
+      - "8083:8080"
+
+  # ---- frontend: node build, served by nginx ----------------------------------
+  frontend:
+    build:
+      context: ../crowdcast-frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ""
+        VITE_ADMIN_KEY: ${ADMIN_API_KEY:-}
+        VITE_USE_MOCKS: "false"
+    image: crowdcast-frontend:local
+    container_name: crowdcast-frontend
     healthcheck:
-      test: ["CMD", "/api", "-healthcheck"]
-      interval: 5s
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 10s
       timeout: 3s
       retries: 5
-      start_period: 3s
     restart: unless-stopped
+    networks:
+      - crowdcast-net
+
+  # ---- public entry point -------------------------------------------------------
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: crowdcast-nginx
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api-01:
+        condition: service_healthy
+      api-02:
+        condition: service_healthy
+      api-03:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8088/nginx_status"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - crowdcast-net
+
+  # ---- observability ------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: crowdcast-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - promdata:/prometheus
+    depends_on:
+      api-01:
+        condition: service_healthy
+      api-02:
+        condition: service_healthy
+      api-03:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - crowdcast-net
+
+  alertmanager:
+    profiles: ["alerts"]
+    image: prom/alertmanager:v0.27.0
+    container_name: crowdcast-alertmanager
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ./alertmanager:/etc/alertmanager:ro
+      - alertmanagerdata:/alertmanager
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9093/-/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - crowdcast-net
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: crowdcast-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/crowdcast-overview.json
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - crowdcast-net
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    container_name: crowdcast-redis-exporter
+    command: ["--redis.addr=redis://redis:6379"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - crowdcast-net
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: crowdcast-postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change-me-postgres}@postgres:5432/${POSTGRES_DB:-crowdcast}?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - crowdcast-net
+
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1.4.0
+    container_name: crowdcast-nginx-exporter
+    command: ["--nginx.scrape-uri=http://nginx:8088/nginx_status"]
+    depends_on:
+      nginx:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - crowdcast-net
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
+    container_name: crowdcast-cadvisor
+    privileged: true
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=15s
+    volumes:
+      - /:/rootfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    restart: unless-stopped
+    networks:
+      - crowdcast-net
+
+  # ---- load generator (profile: load) ---------------------------------------
+  loadgen:
+    profiles: ["load"]
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      target: loadgen
+    image: crowdcast-loadgen:local
+    container_name: crowdcast-loadgen
+    command:
+      - run
+      - --scenario
+      - ${LOADGEN_SCENARIO:-ramp}
+      - --users
+      - ${LOADGEN_USERS:-500}
+      - --duration
+      - ${LOADGEN_DURATION:-2m}
+      - --target
+      - http://nginx:8080
+      - --event
+      - ${LOADGEN_EVENT:-cc-0826}
+      - --summary
+      - /out/loadgen-summary.json
+    volumes:
+      - ../loadgen-out:/out
+    depends_on:
+      nginx:
+        condition: service_healthy
+    restart: "no"
     networks:
       - crowdcast-net
 
 networks:
   crowdcast-net:
+    name: crowdcast-net
     driver: bridge
 
 volumes:
   pgdata:
   redisdata:
+  promdata:
+  alertmanagerdata:
+  grafanadata:

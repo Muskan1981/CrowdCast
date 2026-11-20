@@ -1,7 +1,7 @@
 # Architectural & Design Decisions (ADRs)
 
 ### ADR-001: JSON Data Shape Alignment with React Frontend
-- **Context:** The frontend React components in `/frontend/src` expect specific data shapes (e.g. `trafficData` with `{time, requests}`, `serverRows` with `{name, zone, weight, requests, cpu, memory, status, color}`, and chat messages with `{id, name, text, time, color}`).
+- **Context:** The frontend React components in `/crowdcast-frontend/src` expect specific data shapes (e.g. `trafficData` with `{time, requests}`, `serverRows` with `{name, zone, weight, requests, cpu, memory, status, color}`, and chat messages with `{id, name, text, time, color}`).
 - **Decision:** All REST and WebSocket payloads match these exact field names and types to preserve the rule that frontend markup and CSS remain fixed.
 
 ### ADR-002: Instance Naming and Color Mapping

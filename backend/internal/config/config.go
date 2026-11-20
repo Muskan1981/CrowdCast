@@ -10,41 +10,43 @@ import (
 
 // Config holds all environment-based configuration for CrowdCast instances.
 type Config struct {
-	InstanceID      string        `json:"instance_id"`
-	InstanceZone    string        `json:"instance_zone"`
-	InstanceWeight  int           `json:"instance_weight"`
-	HTTPAddr        string        `json:"http_addr"`
-	RedisURL        string        `json:"redis_url"`
-	DatabaseURL     string        `json:"database_url"`
-	PrometheusURL   string        `json:"prometheus_url"`
-	JWTSecret       string        `json:"-"`
-	AdminAPIKey     string        `json:"-"`
-	AllowedOrigins  []string      `json:"allowed_origins"`
-	WSMaxConns      int           `json:"ws_max_conns"`
-	ReactionBatchMs time.Duration `json:"reaction_batch_ms"`
-	ChatRateLimit   time.Duration `json:"chat_rate_limit"`
-	LogLevel        string        `json:"log_level"`
-	RunMigrations   bool          `json:"run_migrations"`
+	InstanceID     string        `json:"instance_id"`
+	InstanceZone   string        `json:"instance_zone"`
+	InstanceWeight int           `json:"instance_weight"`
+	HTTPAddr       string        `json:"http_addr"`
+	RedisURL       string        `json:"redis_url"`
+	DatabaseURL    string        `json:"database_url"`
+	PrometheusURL  string        `json:"prometheus_url"`
+	GrafanaURL     string        `json:"grafana_url"`
+	JWTSecret      string        `json:"-"`
+	AdminAPIKey    string        `json:"-"`
+	AllowedOrigins []string      `json:"allowed_origins"`
+	WSMaxConns     int           `json:"ws_max_conns"`
+	ReactionBatch  time.Duration `json:"reaction_batch"`
+	ChatRateLimit  time.Duration `json:"chat_rate_limit"`
+	LogLevel       string        `json:"log_level"`
+	RunMigrations  bool          `json:"run_migrations"`
 }
 
 // Load reads configuration from environment variables with safe defaults and validates constraints.
 func Load() (*Config, error) {
 	cfg := &Config{
-		InstanceID:      getEnv("INSTANCE_ID", "crowdcast-api-01"),
-		InstanceZone:    getEnv("INSTANCE_ZONE", "Primary node"),
-		InstanceWeight:  getEnvInt("INSTANCE_WEIGHT", 50),
-		HTTPAddr:        getEnv("HTTP_ADDR", ":8080"),
-		RedisURL:        getEnv("REDIS_URL", "redis://localhost:6379/0"),
-		DatabaseURL:     getEnv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/crowdcast?sslmode=disable"),
-		PrometheusURL:   getEnv("PROMETHEUS_URL", "http://localhost:9090"),
-		JWTSecret:       getEnv("JWT_SECRET", "dev-crowdcast-secret-key-32chars!"),
-		AdminAPIKey:     getEnv("ADMIN_API_KEY", "admin-secret-key"),
-		AllowedOrigins:  getEnvSlice("ALLOWED_ORIGINS", []string{"http://localhost:5173", "http://localhost:8080", "http://localhost:3000", "*"}),
-		WSMaxConns:      getEnvInt("WS_MAX_CONNS", 10000),
-		ReactionBatchMs: time.Duration(getEnvInt("REACTION_BATCH_MS", 250)) * time.Millisecond,
-		ChatRateLimit:   getEnvDuration("CHAT_RATE_LIMIT", 1500*time.Millisecond),
-		LogLevel:        strings.ToLower(getEnv("LOG_LEVEL", "info")),
-		RunMigrations:   getEnvBool("RUN_MIGRATIONS", true),
+		InstanceID:     getEnv("INSTANCE_ID", "crowdcast-api-01"),
+		InstanceZone:   getEnv("INSTANCE_ZONE", "Primary node"),
+		InstanceWeight: getEnvInt("INSTANCE_WEIGHT", 50),
+		HTTPAddr:       getEnv("HTTP_ADDR", ":8080"),
+		RedisURL:       getEnv("REDIS_URL", "redis://localhost:6379/0"),
+		DatabaseURL:    getEnv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/crowdcast?sslmode=disable"),
+		PrometheusURL:  getEnv("PROMETHEUS_URL", "http://localhost:9090"),
+		GrafanaURL:     getEnv("GRAFANA_URL", "http://localhost:3000"),
+		JWTSecret:      getEnv("JWT_SECRET", "dev-crowdcast-secret-key-32chars!"),
+		AdminAPIKey:    getEnv("ADMIN_API_KEY", "admin-secret-key"),
+		AllowedOrigins: getEnvSlice("ALLOWED_ORIGINS", []string{"http://localhost:5173", "http://localhost:8080", "http://localhost:3000", "*"}),
+		WSMaxConns:     getEnvInt("WS_MAX_CONNS", 10000),
+		ReactionBatch:  time.Duration(getEnvInt("REACTION_BATCH_MS", 250)) * time.Millisecond,
+		ChatRateLimit:  getEnvDuration("CHAT_RATE_LIMIT", 1500*time.Millisecond),
+		LogLevel:       strings.ToLower(getEnv("LOG_LEVEL", "info")),
+		RunMigrations:  getEnvBool("RUN_MIGRATIONS", true),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -68,8 +70,8 @@ func (c *Config) Validate() error {
 	if c.WSMaxConns <= 0 {
 		return fmt.Errorf("WS_MAX_CONNS must be > 0 (got %d)", c.WSMaxConns)
 	}
-	if c.ReactionBatchMs <= 0 {
-		return fmt.Errorf("REACTION_BATCH_MS must be > 0 (got %v)", c.ReactionBatchMs)
+	if c.ReactionBatch <= 0 {
+		return fmt.Errorf("REACTION_BATCH_MS must be > 0 (got %v)", c.ReactionBatch)
 	}
 	if c.ChatRateLimit <= 0 {
 		return fmt.Errorf("CHAT_RATE_LIMIT must be > 0 (got %v)", c.ChatRateLimit)

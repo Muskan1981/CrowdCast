@@ -1,0 +1,38 @@
+# Recording rules: precomputed series the dashboards and alerts use.
+groups:
+  - name: crowdcast-recording
+    interval: 15s
+    rules:
+      - record: crowdcast:http_requests:rate1m
+        expr: sum by (instance) (rate(http_requests_total{route!="unmatched",route!="/metrics"}[1m]))
+
+      - record: crowdcast:http_requests:total_rate1m
+        expr: sum(rate(http_requests_total{route!="unmatched",route!="/metrics"}[1m]))
+
+      # Share of all traffic served by each instance, 0-1.
+      - record: crowdcast:traffic_share:ratio
+        expr: crowdcast:http_requests:rate1m / ignoring(instance) group_left crowdcast:http_requests:total_rate1m
+
+      - record: crowdcast:traffic_share:percent
+        expr: 100 * crowdcast:traffic_share:ratio
+
+      - record: crowdcast:http_latency:p50_5m
+        expr: histogram_quantile(0.50, sum by (instance, le) (rate(http_request_duration_seconds_bucket{route!="unmatched"}[5m])))
+
+      - record: crowdcast:http_latency:p95_5m
+        expr: histogram_quantile(0.95, sum by (instance, le) (rate(http_request_duration_seconds_bucket{route!="unmatched"}[5m])))
+
+      - record: crowdcast:http_latency:p99_5m
+        expr: histogram_quantile(0.99, sum by (instance, le) (rate(http_request_duration_seconds_bucket{route!="unmatched"}[5m])))
+
+      - record: crowdcast:http_error_ratio:rate5m
+        expr: |
+          sum by (instance) (rate(http_requests_total{status=~"5..",route!="unmatched"}[5m]))
+          /
+          sum by (instance) (rate(http_requests_total{route!="unmatched"}[5m]))
+
+      - record: crowdcast:http_error_ratio:rate5m_total
+        expr: |
+          sum(rate(http_requests_total{status=~"5..",route!="unmatched"}[5m]))
+          /
+          sum(rate(http_requests_total{route!="unmatched"}[5m]))

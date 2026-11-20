@@ -1,6 +1,6 @@
 # CrowdCast API Contract & WebSocket Protocol Specification
 
-This document is the authoritative specification for all REST endpoints, WebSocket messages, data schemas, and UI bindings for CrowdCast. It bridges the fixed React frontend in `/frontend` with the stateless Go backend instances (`api-01`, `api-02`, `api-03`).
+This document is the authoritative specification for all REST endpoints, WebSocket messages, data schemas, and UI bindings for CrowdCast. It bridges the fixed React frontend in `/crowdcast-frontend` with the stateless Go backend instances (`api-01`, `api-02`, `api-03`).
 
 ---
 
@@ -586,7 +586,7 @@ Injected failure and recovery controls via Redis control pub/sub channel `ps:con
 
 ## 4. Frontend Quirks & Integration Notes
 
-During inspection of `/frontend/src` (`App.jsx`, `pages/*`, `components/*`, and `data/dashboardData.js`), the following quirks were cataloged. The backend and the integration hook layer must accommodate them without modifying the UI markup or CSS:
+During inspection of `/crowdcast-frontend/src` (`App.jsx`, `pages/*`, `components/*`, and `data/dashboardData.js`), the following quirks were cataloged. The backend and the integration hook layer must accommodate them without modifying the UI markup or CSS:
 
 1. **Poll Footer Sums Percentages Instead of Raw Counts:**
    - *Location:* `LiveEventPage.jsx` line 22:

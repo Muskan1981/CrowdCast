@@ -62,11 +62,18 @@ func (s *Service) TakeSnapshot(ctx context.Context, eventID string) (Snapshot, e
 		return Snapshot{}, fmt.Errorf("chat count: %w", err)
 	}
 
-	rps, errRPS := s.prom.QueryInstant(ctx, qRequestsPerSec)
-	latency, errLat := s.prom.QueryInstant(ctx, qAvgLatencyMs)
-	if errRPS != nil || errLat != nil {
+	// If the first query fails, skip the second. An unreachable Prometheus would
+	// otherwise cost two full client timeouts per snapshot.
+	rps, err := s.prom.QueryInstant(ctx, qRequestsPerSec)
+	if err != nil {
 		snap.Source = SourceFallback
 		snap.RequestsPerSec = s.fallbackRPS(ctx, now)
+		return snap, nil
+	}
+	latency, err := s.prom.QueryInstant(ctx, qAvgLatencyMs)
+	if err != nil {
+		snap.Source = SourceFallback
+		snap.RequestsPerSec = rps
 		return snap, nil
 	}
 	snap.RequestsPerSec = rps
@@ -124,10 +131,13 @@ func (s *Service) recordHistory(ctx context.Context, snap Snapshot) error {
 // nil if the event has no history that old yet (so the card shows "—").
 func (s *Service) previousSnapshot(ctx context.Context, eventID string, now time.Time, window time.Duration) (*Snapshot, error) {
 	cutoff := strconv.FormatInt(now.Add(-window).UnixMilli(), 10)
-	res, err := s.rdb.ZRevRangeByScore(ctx, redisstore.StatsHistoryKey(eventID), &redis.ZRangeBy{
-		Min:   "-inf",
-		Max:   cutoff,
-		Count: 1,
+	res, err := s.rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     redisstore.StatsHistoryKey(eventID),
+		ByScore: true,
+		Rev:     true,
+		Start:   cutoff,
+		Stop:    "-inf",
+		Count:   1,
 	}).Result()
 	if err != nil {
 		return nil, err

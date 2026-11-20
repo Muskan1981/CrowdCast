@@ -1,0 +1,38 @@
+# Development overrides. Loaded automatically by `docker compose` next to
+# deploy/docker-compose.yml. `make dev` also loads it explicitly.
+#
+# - api-01/02/03 build the `dev` target and run `air`, which rebuilds on save.
+# - Source is bind-mounted, so editing backend/ reloads the running container.
+# - api-01 exposes a debug port.
+#
+# Note: this file sits next to deploy/docker-compose.yml, so Compose loads it by default
+# when the base file is used with no -f flag. `make up` passes -f explicitly, so it skips this file.
+
+x-api-dev: &api-dev
+  build:
+    target: dev
+  command: ["air", "-c", ".air.toml"]
+  volumes:
+    - ../backend:/src
+    - gomodcache:/go/pkg/mod
+  deploy:
+    resources:
+      limits:
+        cpus: "1.0"
+        memory: 512M
+
+services:
+  api-01:
+    <<: *api-dev
+    ports:
+      - "8081:8080"
+      - "${API_DEBUG_PORT:-2345}:2345"
+
+  api-02:
+    <<: *api-dev
+
+  api-03:
+    <<: *api-dev
+
+volumes:
+  gomodcache:

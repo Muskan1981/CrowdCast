@@ -1,0 +1,69 @@
+# Alert rules. Each alert has a severity and a runbook link in docs/RUNBOOK.md.
+groups:
+  - name: crowdcast-alerts
+    rules:
+      - alert: NodeDown
+        expr: up{job="crowdcast-api"} == 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.node }} is down"
+          description: "Prometheus cannot scrape {{ $labels.node }} ({{ $labels.instance }}) for 15 seconds."
+          runbook_url: "docs/RUNBOOK.md#nodedown"
+
+      - alert: High5xxRate
+        expr: crowdcast:http_error_ratio:rate5m_total > 0.01
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "5xx responses above 1% of traffic"
+          description: "Error ratio is {{ $value | humanizePercentage }} over 5 minutes."
+          runbook_url: "docs/RUNBOOK.md#high5xxrate"
+
+      - alert: HighP95Latency
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{route!="unmatched"}[5m]))) > 0.25
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency above 250 ms"
+          description: "p95 is {{ $value | humanizeDuration }} over the last 5 minutes."
+          runbook_url: "docs/RUNBOOK.md#highp95latency"
+
+      - alert: WSSlowConsumerDrops
+        expr: sum by (instance) (increase(ws_dropped_slow_consumer_total[5m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WebSocket clients are being dropped as slow consumers on {{ $labels.instance }}"
+          description: "{{ $value | printf \"%.0f\" }} slow-consumer disconnects in 5 minutes."
+          runbook_url: "docs/RUNBOOK.md#wsslowconsumerdrops"
+
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is unreachable"
+          description: "The redis exporter cannot reach Redis. Nodes run in degraded mode."
+          runbook_url: "docs/RUNBOOK.md#redisdown"
+
+      # Expected shares follow the nginx weights 5:3:2 (50/30/20). A node more than
+      # 15 points away from its share fires. A dead node makes the others skew,
+      # so this also fires during a node failure, which is intended for the demo.
+      - alert: DistributionSkew
+        expr: |
+          abs(crowdcast:traffic_share:percent{instance="crowdcast-api-01"} - 50) > 15
+          or abs(crowdcast:traffic_share:percent{instance="crowdcast-api-02"} - 30) > 15
+          or abs(crowdcast:traffic_share:percent{instance="crowdcast-api-03"} - 20) > 15
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Traffic split is more than 15 points away from the 50/30/20 weights"
+          description: "Check whether a node is down or the load balancer weights changed."
+          runbook_url: "docs/RUNBOOK.md#distributionskew"

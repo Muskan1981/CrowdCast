@@ -16,10 +16,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/crowdcast/crowdcast/internal/auth"
+	"github.com/crowdcast/crowdcast/internal/chaos"
 	"github.com/crowdcast/crowdcast/internal/chat"
 	"github.com/crowdcast/crowdcast/internal/config"
+	"github.com/crowdcast/crowdcast/internal/degraded"
 	"github.com/crowdcast/crowdcast/internal/events"
 	"github.com/crowdcast/crowdcast/internal/hub"
+	"github.com/crowdcast/crowdcast/internal/infra"
 	"github.com/crowdcast/crowdcast/internal/metrics"
 	"github.com/crowdcast/crowdcast/internal/middleware"
 	"github.com/crowdcast/crowdcast/internal/polls"
@@ -173,7 +176,7 @@ func main() {
 		logger.Error("failed to connect to redis", slog.Any("error", err))
 		os.Exit(1)
 	}
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 
 	router, hubInstance := setupRouter(cfg, logger, pgPool, redisClient)
 
@@ -223,9 +226,28 @@ func main() {
 func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool, rdb *redisstore.Client) (*chi.Mux, *hub.Hub) {
 	r := chi.NewRouter()
 
+	// Chaos and degraded-mode state. Created before the middleware chain because
+	// chi requires Use() before any route is registered.
+	var chaosStore chaos.Store = chaos.NewMemoryStore()
+	if rdb != nil {
+		chaosStore = chaos.RedisStore{Client: rdb.Client}
+	}
+	fx := &chaos.HubEffects{Redis: rdb}
+	if pgPool != nil {
+		fx.Activity = postgres.NewActivityRepository(pgPool)
+	}
+	ctrl := chaos.NewController(cfg.InstanceID, chaosStore, fx)
+	if err := ctrl.Load(context.Background()); err != nil {
+		logger.Error("failed to load chaos state", slog.Any("error", err))
+	}
+	dmode := &degraded.Mode{}
+
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer(logger))
 	r.Use(metrics.Default().HTTPMiddleware())
+	// InstanceHeader comes first so even chaos-refused responses name the node that refused them.
+	r.Use(middleware.InstanceHeader(cfg.InstanceID))
+	r.Use(chaos.Middleware(ctrl))
 	r.Use(middleware.CORS(cfg.AllowedOrigins))
 	r.Use(middleware.AccessLog(logger))
 	r.Use(middleware.Timeout(30 * time.Second))
@@ -234,15 +256,7 @@ func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool, 
 	// so the public Nginx route can block /metrics while probes stay reachable.
 	r.Handle("/metrics", metrics.Default().Handler())
 
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status":      "ok",
-			"instance_id": cfg.InstanceID,
-			"timestamp":   time.Now().UTC().Format(time.RFC3339),
-		})
-	})
+	r.Get("/healthz", chaos.HealthzHandler(ctrl, cfg.InstanceID))
 
 	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -259,21 +273,24 @@ func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool, 
 			return
 		}
 
+		// Redis down is degraded, not failed: the node keeps serving from its buffer.
+		status := "ok"
 		if rdb != nil {
 			if err := rdb.Ping(ctx); err != nil {
-				w.WriteHeader(http.StatusServiceUnavailable)
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"ready":       false,
-					"instance_id": cfg.InstanceID,
-					"error":       fmt.Sprintf("redis ping failed: %v", err),
-				})
-				return
+				status = "degraded"
 			}
+		}
+		if ctrl.Failed() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ready": false, "status": "failed", "instance_id": cfg.InstanceID})
+			return
 		}
 
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"ready":       true,
+			"status":      status,
+			"degraded":    status == "degraded",
 			"instance_id": cfg.InstanceID,
 			"timestamp":   time.Now().UTC().Format(time.RFC3339),
 		})
@@ -305,9 +322,10 @@ func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool, 
 	if rdb != nil {
 		presenceSvc = presence.NewService(rdb, viewerRepo, eventRepo)
 		hubInstance = hub.NewHub(rdb, presenceSvc)
+		fx.Hub = hubInstance
 	}
 
-	rxService := reactions.NewService(rdb, rxRepo, hubInstance, cfg.ReactionBatchMs)
+	rxService := reactions.NewService(rdb, rxRepo, hubInstance, cfg.ReactionBatch)
 	rxHandler := reactions.NewHandler(rxService)
 
 	chatService := chat.NewService(rdb, chatRepo, hubInstance, cfg.ChatRateLimit)
@@ -340,6 +358,30 @@ func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool, 
 		)
 		go elector.Run(context.Background(), statsSvc.RunLeader)
 		go stats.RunRequestFlusher(context.Background(), rdb, metrics.Default(), 5*time.Second)
+	}
+
+	var chaosAdmin *chaos.AdminHandler
+	var infraHandler *infra.Handler
+	if rdb != nil {
+		bg := context.Background()
+		go dmode.Watch(bg, rdb.Ping, time.Second)
+		go ctrl.Run(bg, chaos.ControlSource(bg, rdb.Client))
+
+		registry := infra.NewRegistry(infra.RedisKV{Client: rdb.Client}, infra.HeartbeatTTL)
+		go infra.RunHeartbeat(bg, registry, 2*time.Second, nodeRecordBuilder(cfg, ctrl, dmode))
+
+		names := make([]string, 0, len(infra.ExpectedNodes))
+		for _, n := range infra.ExpectedNodes {
+			names = append(names, n.Name)
+		}
+		chaosAdmin = chaos.NewAdminHandler(cfg.InstanceID, names, chaos.RedisPublisher{Client: rdb.Client},
+			redisstore.ControlChannelKey(), chaosStore)
+
+		prom := stats.NewPromClient(cfg.PrometheusURL, 2*time.Second)
+		infraHandler = infra.NewHandler(registry, infra.ExpectedNodes, prom, []infra.MonitorCheck{
+			{Name: "Prometheus", Subtitle: "scrapes every 5s", URL: cfg.PrometheusURL + "/-/healthy"},
+			{Name: "Grafana", Subtitle: "dashboards", URL: cfg.GrafanaURL + "/api/health"},
+		})
 	}
 
 	wsHandler := ws.NewHandler(
@@ -379,6 +421,9 @@ func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool, 
 			api.Get("/events/{id}/stats/overview", statsHandler.Overview)
 			api.Get("/events/{id}/stats/traffic", statsHandler.Traffic)
 			api.Get("/events/{id}/stats/audience", statsHandler.Audience)
+		}
+		if infraHandler != nil {
+			api.Get("/infra/nodes", infraHandler.Nodes)
 		}
 
 		// Events
@@ -421,6 +466,11 @@ func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool, 
 			})
 
 			// Admin poll controls
+			if chaosAdmin != nil {
+				admin.Post("/admin/nodes/{name}/fail", chaosAdmin.Fail)
+				admin.Post("/admin/nodes/{name}/restore", chaosAdmin.Restore)
+				admin.Post("/admin/nodes/{name}/latency", chaosAdmin.Latency)
+			}
 			admin.Post("/events/{id}/polls", pollHandler.AdminCreatePoll)
 			admin.Post("/polls/{pid}/activate", pollHandler.AdminActivatePoll)
 			admin.Post("/polls/{pid}/close", pollHandler.AdminClosePoll)
@@ -428,4 +478,41 @@ func setupRouter(cfg *config.Config, logger *slog.Logger, pgPool *pgxpool.Pool, 
 	})
 
 	return r, hubInstance
+}
+
+// nodeRecordBuilder produces this instance's heartbeat. Requests per second is
+// the delta of the request counter over the heartbeat interval.
+func nodeRecordBuilder(cfg *config.Config, ctrl *chaos.Controller, dmode *degraded.Mode) infra.Builder {
+	m := metrics.Default()
+	var lastCount uint64
+	var lastAt time.Time
+	return func(now time.Time) infra.NodeRecord {
+		cur := m.RequestCount()
+		var rps float64
+		if !lastAt.IsZero() {
+			if elapsed := now.Sub(lastAt).Seconds(); elapsed > 0 {
+				rps = float64(cur-lastCount) / elapsed
+			}
+		}
+		lastCount, lastAt = cur, now
+
+		health := infra.HealthHealthy
+		switch ctrl.State().Status {
+		case chaos.StatusDraining:
+			health = infra.HealthDraining
+		case chaos.StatusFailed:
+			health = infra.HealthFailed
+		default:
+			if dmode.IsDegraded() {
+				health = infra.HealthDegraded
+			}
+		}
+
+		ns := m.NodeStats()
+		return infra.NodeRecord{
+			Name: cfg.InstanceID, Zone: cfg.InstanceZone, Weight: cfg.InstanceWeight,
+			RequestsPerSec: rps, CPU: ns.CPUPercent, Memory: ns.MemoryPercent,
+			Connections: m.ActiveConnections(), Health: health,
+		}
+	}
 }

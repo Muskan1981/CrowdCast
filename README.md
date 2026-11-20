@@ -8,7 +8,7 @@
 
 | Layer | What it is |
 |---|---|
-| **Frontend** | Existing React + Vite + Recharts dashboard (already built; styling stays untouched). Lives in `/frontend`. |
+| **Frontend** | Existing React + Vite + Recharts dashboard (already built; styling stays untouched). Lives in `crowdcast-frontend/`. |
 | **Backend** | Go service (`crowdcast-api`) run as **3 identical instances** (`api-01`, `api-02`, `api-03`). Stateless. Any node can serve any client. |
 | **Shared state / fan-out** | Redis (counters, presence, chat buffer, poll votes, **pub/sub** to sync instances) |
 | **Durable storage** | PostgreSQL (events, polls, votes, chat history, attendance sessions, rollups) |
@@ -199,7 +199,7 @@ Server → client: `welcome` · `presence` · `reaction_batch` · `chat` · `pol
 
 ```
 crowdcast/
-├── frontend/                  # existing React app (UI unchanged)
+├── crowdcast-frontend/                  # existing React app (UI unchanged)
 ├── backend/
 │   ├── cmd/
 │   │   ├── api/               # main service

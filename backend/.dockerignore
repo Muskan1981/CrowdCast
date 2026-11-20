@@ -1,0 +1,12 @@
+# Keep the build context small and free of local artifacts.
+.git
+bin/
+api-linux
+*.test
+*.out
+coverage.*
+dump.rdb
+*.log
+tmp/
+Dockerfile
+.dockerignore

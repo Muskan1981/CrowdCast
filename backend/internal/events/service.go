@@ -86,7 +86,7 @@ func (s *Service) GetEvent(ctx context.Context, eventID string) (*EventDetails, 
 
 	now := time.Now().UTC()
 	currentStatus := EventStatus(pgEvent.Status)
-	var startedAt *time.Time = pgEvent.StartedAt
+	startedAt := pgEvent.StartedAt
 	var pausedAt *time.Time
 	var pausedMs int64 = 0
 	var peakAudience int64 = 0
@@ -198,7 +198,7 @@ func (s *Service) TransitionEvent(ctx context.Context, eventID string, action Ev
 	now := time.Now().UTC()
 	stateKey := redisstore.EventStateKey(eventID)
 
-	var startedAtStr string = event.StartedAt
+	startedAtStr := event.StartedAt
 	var pausedAtStr string
 	var pausedMs int64 = 0
 

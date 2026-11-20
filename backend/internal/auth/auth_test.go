@@ -1,46 +1,13 @@
 package auth
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/crowdcast/crowdcast/internal/store/postgres"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// mockViewerRepo implements postgres.ViewerRepository for unit tests.
-type mockViewerRepo struct {
-	created []*postgres.Viewer
-}
-
-func (m *mockViewerRepo) Upsert(ctx context.Context, v *postgres.Viewer) error {
-	m.created = append(m.created, v)
-	return nil
-}
-
-func (m *mockViewerRepo) Get(ctx context.Context, id string) (*postgres.Viewer, error) {
-	for _, v := range m.created {
-		if v.ID == id {
-			return v, nil
-		}
-	}
-	return nil, postgres.ErrNotFound
-}
-
-func (m *mockViewerRepo) RecordAttendance(ctx context.Context, session *postgres.AttendanceSession) (int64, error) {
-	return 1, nil
-}
-
-func (m *mockViewerRepo) EndAttendance(ctx context.Context, sessionID int64) error {
-	return nil
-}
-
-func (m *mockViewerRepo) GetCityMix(ctx context.Context, eventID string) ([]postgres.CityShare, error) {
-	return nil, nil
-}
 
 func TestTokenService(t *testing.T) {
 	ts := NewTokenService("test-super-secret-key-1234567890")

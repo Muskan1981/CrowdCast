@@ -1,3 +1,6 @@
+# golangci-lint v2 configuration. Run with: make lint (or golangci-lint run ./... in backend/).
+version: "2"
+
 run:
   timeout: 5m
   tests: true
@@ -5,26 +8,29 @@ run:
 linters:
   enable:
     - errcheck
-    - gosimple
     - govet
     - ineffassign
     - staticcheck
     - unused
-    - gofmt
     - revive
     - misspell
-
-linters-settings:
-  govet:
-    enable-all: true
-    disable:
-      - fieldalignment
-  revive:
+  settings:
+    govet:
+      disable:
+        - fieldalignment
+    revive:
+      # The `exported` rule (doc comments on every exported symbol) is turned off on
+      # purpose: this is an application, not a library, and most symbols are
+      # described by the package docs and docs/API_CONTRACT.md instead.
+      rules:
+        - name: exported
+          disabled: true
+  exclusions:
     rules:
-      - name: exported
-        disabled: false
+      # Test helpers and benchmark fixtures do not need doc comments.
+      - path: _test\.go
+        linters: [revive]
 
-issues:
-  exclude-use-default: false
-  max-issues-per-linter: 0
-  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt

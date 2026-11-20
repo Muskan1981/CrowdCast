@@ -14,14 +14,12 @@ import (
 
 // Hub coordinates all event rooms for this backend instance.
 type Hub struct {
-	rdb       *redisstore.Client
-	presence  *presence.Service
-	rooms     map[string]*Room
-	roomsMu   sync.RWMutex
-	ctx       context.Context
-	cancel    context.CancelFunc
-	running   bool
-	runningMu sync.Mutex
+	rdb      *redisstore.Client
+	presence *presence.Service
+	rooms    map[string]*Room
+	roomsMu  sync.RWMutex
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 func NewHub(rdb *redisstore.Client, presenceSvc *presence.Service) *Hub {
@@ -61,6 +59,23 @@ func (h *Hub) GetOrCreateRoom(eventID string) *Room {
 
 	slog.Info("created room for event with single redis subscriber", "event_id", eventID)
 	return room
+}
+
+// Close stops the presence ticker and every room, and cancels their Redis
+// subscriptions. Unlike Drain it does not close client sockets; call CloseAll first if needed.
+// It is safe to call more than once.
+func (h *Hub) Close() {
+	h.cancel()
+	h.roomsMu.Lock()
+	rooms := make([]*Room, 0, len(h.rooms))
+	for id, r := range h.rooms {
+		rooms = append(rooms, r)
+		delete(h.rooms, id)
+	}
+	h.roomsMu.Unlock()
+	for _, r := range rooms {
+		r.Stop()
+	}
 }
 
 func (h *Hub) removeRoom(eventID string) {
@@ -173,4 +188,28 @@ func (h *Hub) Drain(timeout time.Duration) {
 	}
 
 	time.Sleep(200 * time.Millisecond)
+}
+
+// CloseAll closes every local client with the given WebSocket close code.
+// Unlike Drain it keeps the rooms running, so the instance stays usable for
+// other work. Clients reconnect through the load balancer.
+func (h *Hub) CloseAll(code int, reason string) {
+	h.roomsMu.RLock()
+	rooms := make([]*Room, 0, len(h.rooms))
+	for _, r := range h.rooms {
+		rooms = append(rooms, r)
+	}
+	h.roomsMu.RUnlock()
+
+	for _, room := range rooms {
+		room.clientsMu.RLock()
+		clients := make([]Client, 0, len(room.clients))
+		for c := range room.clients {
+			clients = append(clients, c)
+		}
+		room.clientsMu.RUnlock()
+		for _, c := range clients {
+			c.Close(code, reason)
+		}
+	}
 }

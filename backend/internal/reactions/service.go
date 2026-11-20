@@ -38,10 +38,10 @@ type ReactionBatchMessage struct {
 }
 
 type Service struct {
-	rdb         *redisstore.Client
-	reactionsPg postgres.ReactionRepository
-	hub         *hub.Hub
-	batchMs     time.Duration
+	rdb           *redisstore.Client
+	reactionsPg   postgres.ReactionRepository
+	hub           *hub.Hub
+	batchInterval time.Duration
 
 	// In-memory aggregator: eventID -> emoji -> count
 	pendingMu sync.Mutex
@@ -63,22 +63,22 @@ func NewService(
 	rdb *redisstore.Client,
 	rxRepo postgres.ReactionRepository,
 	hubInstance *hub.Hub,
-	batchMs time.Duration,
+	batchInterval time.Duration,
 ) *Service {
-	if batchMs <= 0 {
-		batchMs = 250 * time.Millisecond
+	if batchInterval <= 0 {
+		batchInterval = 250 * time.Millisecond
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
-		rdb:         rdb,
-		reactionsPg: rxRepo,
-		hub:         hubInstance,
-		batchMs:     batchMs,
-		pending:     make(map[string]map[string]int),
-		rollups:     make(map[string]map[string]int),
-		limiters:    make(map[string]*rate.Limiter),
-		ctx:         ctx,
-		cancel:      cancel,
+		rdb:           rdb,
+		reactionsPg:   rxRepo,
+		hub:           hubInstance,
+		batchInterval: batchInterval,
+		pending:       make(map[string]map[string]int),
+		rollups:       make(map[string]map[string]int),
+		limiters:      make(map[string]*rate.Limiter),
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 
 	go s.runBatchFlusher()
@@ -130,7 +130,7 @@ func (s *Service) allowUser(userID string) bool {
 
 // runBatchFlusher publishes coalesced reaction batches to Redis every REACTION_BATCH_MS.
 func (s *Service) runBatchFlusher() {
-	ticker := time.NewTicker(s.batchMs)
+	ticker := time.NewTicker(s.batchInterval)
 	defer ticker.Stop()
 
 	for {
@@ -144,6 +144,9 @@ func (s *Service) runBatchFlusher() {
 }
 
 func (s *Service) flushPendingBatches() {
+	if s.rdb == nil {
+		return // no Redis (unit tests): nothing can be persisted, so keep the batch out of the way
+	}
 	s.pendingMu.Lock()
 	if len(s.pending) == 0 {
 		s.pendingMu.Unlock()

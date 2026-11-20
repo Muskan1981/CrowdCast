@@ -19,8 +19,6 @@ vendor/
 
 # Node / frontend
 node_modules/
-frontend/dist/
-frontend/.env.local
 
 # IDE & OS
 .idea/
@@ -32,6 +30,14 @@ Thumbs.db
 
 # Docker & local data
 .env
-data/
+# Root-level data folder only; frontend source folders named data/ must stay tracked.
+/data/
 *.log
 tmp/
+
+# Frontend build output (crowdcast-frontend)
+crowdcast-frontend/dist/
+crowdcast-frontend/node_modules/
+
+# Load generator output
+loadgen-out/

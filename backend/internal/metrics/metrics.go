@@ -39,6 +39,7 @@ type Metrics struct {
 	EventAudience   prometheus.Gauge
 	NodeCPU         prometheus.Gauge
 	NodeMemory      prometheus.Gauge
+	ChaosEvents     *prometheus.CounterVec // node, action
 
 	sampler sampler
 
@@ -46,6 +47,7 @@ type Metrics struct {
 	// labelled counter it can be read cheaply, so the stats package uses it to
 	// feed the Redis traffic fallback.
 	requests atomic.Uint64
+	conns    atomic.Int64
 }
 
 // RequestCount returns the total HTTP requests this instance has handled.
@@ -120,6 +122,10 @@ func New(instanceID string) *Metrics {
 			Name: "node_cpu_percent",
 			Help: "CPU usage of this process as a percentage of one core's wall time, normalised by core count.",
 		}),
+		ChaosEvents: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "chaos_events_total",
+			Help: "Chaos commands applied on this node, by action. Grafana annotates from changes to this counter.",
+		}, []string{"node", "action"}),
 		NodeMemory: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "node_memory_percent",
 			Help: "Memory in use as a percentage of the container limit (host memory when unlimited).",
@@ -134,7 +140,7 @@ func New(instanceID string) *Metrics {
 		m.Reactions, m.ChatMessages, m.PollVotes,
 		m.RedisOpDuration, m.PubSubLag,
 		m.AppErrors, m.EventAudience,
-		m.NodeCPU, m.NodeMemory,
+		m.NodeCPU, m.NodeMemory, m.ChaosEvents,
 	)
 	return m
 }
@@ -171,4 +177,22 @@ func SetDefault(m *Metrics) {
 	defaultMu.Lock()
 	defer defaultMu.Unlock()
 	defaultM = m
+}
+
+// ConnOpened records a new WebSocket connection on this instance. It updates
+// the Prometheus gauge and an atomic counter the node heartbeat reads cheaply.
+func (m *Metrics) ConnOpened() {
+	m.WSActive.Inc()
+	m.conns.Add(1)
+}
+
+// ConnClosed is the counterpart of ConnOpened.
+func (m *Metrics) ConnClosed() {
+	m.WSActive.Dec()
+	m.conns.Add(-1)
+}
+
+// ActiveConnections returns the open WebSocket connections on this instance.
+func (m *Metrics) ActiveConnections() int64 {
+	return m.conns.Load()
 }

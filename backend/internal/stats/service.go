@@ -17,6 +17,7 @@ import (
 
 const (
 	tickInterval     = 2 * time.Second
+	tickBudget       = 4 * time.Second
 	overviewCacheTTL = 1500 * time.Millisecond
 	trafficCacheTTL  = 2 * time.Second
 	trafficBucket    = 5 * time.Minute
@@ -509,7 +510,10 @@ func (s *Service) tickAll(ctx context.Context) {
 }
 
 func (s *Service) tickEvent(ctx context.Context, eventID string) {
-	tickCtx, cancel := context.WithTimeout(ctx, tickInterval-500*time.Millisecond)
+	// The budget must cover one Prometheus attempt (up to its 2 s client timeout,
+	// which includes DNS failure for a missing host) plus the Redis work after it.
+	// A 1.5 s budget let a failed Prometheus call starve every later Redis call.
+	tickCtx, cancel := context.WithTimeout(ctx, tickBudget)
 	defer cancel()
 
 	snap, err := s.TakeSnapshot(tickCtx, eventID)

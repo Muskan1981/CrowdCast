@@ -110,8 +110,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	m := metrics.Default()
-	m.WSActive.Inc()
-	defer m.WSActive.Dec()
+	m.ConnOpened()
+	defer m.ConnClosed()
 
 	client := NewClient(
 		claims.UserID,

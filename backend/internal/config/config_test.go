@@ -22,8 +22,8 @@ func TestConfigDefaults(t *testing.T) {
 	if cfg.HTTPAddr != ":8080" {
 		t.Errorf("expected default HTTPAddr ':8080', got %q", cfg.HTTPAddr)
 	}
-	if cfg.ReactionBatchMs != 250*time.Millisecond {
-		t.Errorf("expected default ReactionBatchMs 250ms, got %v", cfg.ReactionBatchMs)
+	if cfg.ReactionBatch != 250*time.Millisecond {
+		t.Errorf("expected default ReactionBatch 250ms, got %v", cfg.ReactionBatch)
 	}
 	if cfg.ChatRateLimit != 1500*time.Millisecond {
 		t.Errorf("expected default ChatRateLimit 1.5s, got %v", cfg.ChatRateLimit)
@@ -94,10 +94,10 @@ func TestConfigValidation(t *testing.T) {
 }
 
 func TestConfigEnvOverrides(t *testing.T) {
-	os.Setenv("INSTANCE_ID", "crowdcast-api-03")
-	os.Setenv("INSTANCE_WEIGHT", "20")
-	os.Setenv("LOG_LEVEL", "warn")
-	os.Setenv("ALLOWED_ORIGINS", "http://site1.com, http://site2.com")
+	_ = os.Setenv("INSTANCE_ID", "crowdcast-api-03")
+	_ = os.Setenv("INSTANCE_WEIGHT", "20")
+	_ = os.Setenv("LOG_LEVEL", "warn")
+	_ = os.Setenv("ALLOWED_ORIGINS", "http://site1.com, http://site2.com")
 	defer os.Clearenv()
 
 	cfg, err := Load()

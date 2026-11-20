@@ -1,0 +1,11 @@
+# Routes alerts to a log receiver by default. Add a real receiver (Slack, email)
+# here for production use.
+route:
+  receiver: default
+  group_by: [alertname, node, instance]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 4h
+
+receivers:
+  - name: default

@@ -69,7 +69,7 @@ func MigrateUp(databaseURL string) error {
 	}
 
 	db := stdlib.OpenDB(*connConfig)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Ensure DB is responsive before migrating
 	var pingErr error
@@ -113,7 +113,7 @@ func MigrateDown(databaseURL string) error {
 	}
 
 	db := stdlib.OpenDB(*connConfig)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	driver, err := migpg.WithInstance(db, &migpg.Config{})
 	if err != nil {

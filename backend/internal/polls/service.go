@@ -262,7 +262,7 @@ func (s *Service) ActivatePoll(ctx context.Context, pollID string) error {
 	if s.pollPg == nil {
 		return errors.New("postgres not connected")
 	}
-	return s.pollPg.Activate(ctx, pollID)
+	return mapNotFound(s.pollPg.Activate(ctx, pollID))
 }
 
 // Admin: ClosePoll closes an active poll.
@@ -270,5 +270,14 @@ func (s *Service) ClosePoll(ctx context.Context, pollID string) error {
 	if s.pollPg == nil {
 		return errors.New("postgres not connected")
 	}
-	return s.pollPg.Close(ctx, pollID)
+	return mapNotFound(s.pollPg.Close(ctx, pollID))
+}
+
+// mapNotFound turns the repository's not-found error into this package's ErrNotFound,
+// so handlers can answer 404 without knowing about the database layer.
+func mapNotFound(err error) error {
+	if errors.Is(err, postgres.ErrNotFound) {
+		return ErrNotFound
+	}
+	return err
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crowdcast/crowdcast/internal/metrics"
@@ -95,7 +96,7 @@ func (r *Room) run() {
 }
 
 func (r *Room) listenRedis(ctx context.Context, pubsub *redis.PubSub) {
-	defer pubsub.Close()
+	defer func() { _ = pubsub.Close() }()
 	ch := pubsub.Channel()
 
 	for {
@@ -121,8 +122,25 @@ func (r *Room) listenRedis(ctx context.Context, pubsub *redis.PubSub) {
 	}
 }
 
+// emptyRoomDelay is how long an empty room lingers before it is closed. It is a
+// variable so tests can shorten it.
+var emptyRoomDelayNs atomic.Int64
+
+func init() { emptyRoomDelayNs.Store(int64(10 * time.Second)) }
+
+// setEmptyRoomDelay changes the delay. It is atomic because rooms read it from their own goroutines.
+func setEmptyRoomDelay(d time.Duration) { emptyRoomDelayNs.Store(int64(d)) }
+
+// checkEmptyRoom closes the room if it is still empty after emptyRoomDelay. It
+// returns early if the room is stopped first, so it never outlives the room.
 func (r *Room) checkEmptyRoom() {
-	time.Sleep(10 * time.Second)
+	timer := time.NewTimer(time.Duration(emptyRoomDelayNs.Load()))
+	defer timer.Stop()
+	select {
+	case <-r.stopChan:
+		return
+	case <-timer.C:
+	}
 	r.clientsMu.RLock()
 	count := len(r.clients)
 	r.clientsMu.RUnlock()

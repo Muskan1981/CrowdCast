@@ -39,10 +39,15 @@ type Service struct {
 	activeSessions sync.Map // viewerID_eventID -> sessionID (int64)
 	sparklineBars  []int
 	barsMu         sync.RWMutex
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 func NewService(rdb *redisstore.Client, viewers postgres.ViewerRepository, events postgres.EventRepository) *Service {
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
+		ctx:         ctx,
+		cancel:      cancel,
 		rdb:         rdb,
 		viewers:     viewers,
 		events:      events,
@@ -179,9 +184,16 @@ func (s *Service) UpdateSparkline(val int) {
 	s.sparklineBars = append(s.sparklineBars, normalized)
 }
 
+// Close stops the attendance writer goroutine. It is safe to call more than once.
+func (s *Service) Close() {
+	s.cancel()
+}
+
 func (s *Service) processAttendanceSessions() {
 	for {
 		select {
+		case <-s.ctx.Done():
+			return
 		case rec := <-s.sessionChan:
 			if s.viewers != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

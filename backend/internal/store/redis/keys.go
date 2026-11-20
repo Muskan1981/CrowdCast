@@ -88,3 +88,11 @@ func StatsMilestoneKey(eventID string) string {
 func StatsRequestsKey() string {
 	return "stats:reqs"
 }
+
+// NodeHeartbeatKey holds one instance's latest heartbeat record (node:{name}:hb).
+// It is written with a TTL, so a dead instance's entry expires on its own.
+func NodeHeartbeatKey(nodeName string) string {
+	return fmt.Sprintf("node:%s:hb", nodeName)
+}
+
+// ChaosNodeKey (chaos:{node}) already exists above; it holds the persisted chaos state.
